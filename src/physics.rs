@@ -44,10 +44,10 @@ const POSE: [(f32, f32); N] = [
     (4.0, -24.0),  // R shoulder
     (6.5, -18.0),  // R elbow
     (7.5, -12.0),  // R hand
-    (-3.0, -7.0),  // L knee
-    (-3.0, 0.0),   // L foot
-    (3.0, -7.0),   // R knee
-    (3.0, 0.0),    // R foot
+    (-2.5, -7.0),  // L knee
+    (-2.5, 0.0),   // L foot
+    (2.5, -7.0),   // R knee
+    (2.5, 0.0),    // R foot
 ];
 
 /// The six damageable regions of a body.
@@ -553,10 +553,10 @@ impl Ragdolls {
             }
             // head + a little face dot for orientation
             let hcol = body_color(body, Part::Head);
-            draw_circle(px(HEAD), py(HEAD), 3.4 * scale, hcol);
+            draw_circle(px(HEAD), py(HEAD), 4.2 * scale, hcol);
             if !body.severed[Part::Head.idx()] && body.char[Part::Head.idx()] < 0.6 {
-                let fx = px(HEAD) + body.facing * 1.4 * scale;
-                draw_circle(fx, py(HEAD) - 0.3 * scale, 0.6 * scale, Color::from_rgba(30, 25, 25, 255));
+                let fx = px(HEAD) + body.facing * 1.8 * scale;
+                draw_circle(fx, py(HEAD) - 0.4 * scale, 0.8 * scale, Color::from_rgba(40, 32, 30, 255));
             }
         }
     }
@@ -565,24 +565,25 @@ impl Ragdolls {
 // Visible bones: (a, b, thickness, colour-part, proximal?). Proximal bones are
 // the ones that attach a limb to the trunk, and disappear when it's severed.
 const BONES: &[(usize, usize, f32, Part, bool)] = &[
-    (NECK, CHEST, 3.0, Part::Torso, false),
-    (CHEST, PELVIS, 4.2, Part::Torso, false),
-    (HEAD, NECK, 1.9, Part::Torso, false),
-    (CHEST, L_SHOULDER, 2.6, Part::ArmL, true),
-    (L_SHOULDER, L_ELBOW, 2.3, Part::ArmL, false),
-    (L_ELBOW, L_HAND, 2.0, Part::ArmL, false),
-    (CHEST, R_SHOULDER, 2.6, Part::ArmR, true),
-    (R_SHOULDER, R_ELBOW, 2.3, Part::ArmR, false),
-    (R_ELBOW, R_HAND, 2.0, Part::ArmR, false),
-    (PELVIS, L_KNEE, 3.0, Part::LegL, true),
-    (L_KNEE, L_FOOT, 2.6, Part::LegL, false),
-    (PELVIS, R_KNEE, 3.0, Part::LegR, true),
-    (R_KNEE, R_FOOT, 2.6, Part::LegR, false),
+    (NECK, CHEST, 5.5, Part::Torso, false),    // broad upper chest
+    (CHEST, PELVIS, 7.5, Part::Torso, false),  // the torso bulk
+    (HEAD, NECK, 3.2, Part::Torso, false),     // neck
+    (CHEST, L_SHOULDER, 4.2, Part::ArmL, true),
+    (L_SHOULDER, L_ELBOW, 3.8, Part::ArmL, false),
+    (L_ELBOW, L_HAND, 3.3, Part::ArmL, false),
+    (CHEST, R_SHOULDER, 4.2, Part::ArmR, true),
+    (R_SHOULDER, R_ELBOW, 3.8, Part::ArmR, false),
+    (R_ELBOW, R_HAND, 3.3, Part::ArmR, false),
+    (PELVIS, L_KNEE, 5.0, Part::LegL, true),
+    (L_KNEE, L_FOOT, 4.4, Part::LegL, false),
+    (PELVIS, R_KNEE, 5.0, Part::LegR, true),
+    (R_KNEE, R_FOOT, 4.4, Part::LegR, false),
 ];
 
-// Joint disc radius per particle (index 0/head drawn separately).
+// Joint disc radius per particle, rounding the capsule ends into a solid body
+// (index 0/head is drawn separately).
 const JOINT_R: [f32; N] = [
-    0.0, 1.0, 2.1, 2.1, 1.3, 1.1, 1.2, 1.3, 1.1, 1.2, 1.4, 1.4, 1.4, 1.4,
+    0.0, 1.7, 3.6, 3.6, 2.1, 1.8, 1.8, 2.1, 1.8, 1.8, 2.3, 2.2, 2.3, 2.2,
 ];
 
 fn body_color(body: &Body, part: Part) -> Color {

@@ -141,11 +141,6 @@ fn setup_demo(world: &mut World) {
         world.spawn(90, y, Element::Metal, 0);
     }
     world.paint(91, h - 16, 0, Element::Gun);
-    // a campfire hazard on the floor
-    world.paint(170, h - 4, 4, Element::Fire);
-    for x in 165..176 {
-        world.spawn(x, h - 3, Element::Wood, 0);
-    }
 }
 
 #[macroquad::main(window_conf)]

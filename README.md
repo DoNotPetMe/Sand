@@ -4,13 +4,6 @@ A desktop falling-sand toy in the spirit of the classic web "powder games", but
 built as a native application in **Rust** with a focus on *emergent* physics
 rather than a long list of hard-coded special cases.
 
-![showcase](showcase.png)
-
-The screenshot above is a single simulated scene: oil floating on a water basin
-(left), a faucet pouring a water stream (centre), a wooden block mid-combustion
-throwing a plume of fire and smoke (right), and a lava pool cooling into a stone
-crust on a shelf (far right).
-
 ## Ragdoll people — a physics layer on the sand
 
 On top of the cellular grid runs a **Verlet ragdoll** system: articulated humans
