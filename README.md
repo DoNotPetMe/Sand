@@ -34,6 +34,13 @@ behaviour fall out of them:
   slowly **cools into stone from the edges inward** (a crust); water touching
   lava **boils to steam** which **condenses back to water** as it cools; ice
   melts near flame; wood and plants combust when they get hot enough.
+- **Melting and freezing.** Heat a metal beam enough — with a **lava** pool or
+  the **Heater** furnace block — and it **slumps into glowing molten metal** that
+  flows, pools, and **freezes back into solid metal** wherever it cools. Sand and
+  glass melt into **molten glass** that sets into glass; rock itself melts to lava
+  under meteor/nuke heat. A large pool keeps its core molten while the edges
+  solidify first, because the heat is shared — nothing is special-cased, it just
+  falls out of the temperature field.
 - **Density-based movement.** Powders, liquids and gases all displace each other
   by density, so **oil floats on water**, **sand sinks through both**, smoke and
   steam rise, and lava sinks below water.
@@ -58,7 +65,8 @@ Picked from seven **submenu tabs** in the side panel:
 - **Powders** — Sand · Dirt · Salt · Coal · Gunpowder · Snow · Ash · Seed ·
   Concrete (cures into stone)
 - **Liquids** — Water · Oil · Gasoline · Acid · Lava · Blood · Mercury
-  (heavy & conductive) · Napalm (sticky fire)
+  (heavy & conductive) · Napalm (sticky fire) · Molten Metal & Molten Glass
+  (white-hot; freeze into metal/glass as they cool)
 - **Gases** — Steam · Smoke · Toxic Gas · Methane (explosive) · Fire
 - **Life** — Plant · Ant · **Person** · **Zombie** · **Fish** · Virus
 - **Weapons** — Bomb · TNT · C4 (remote-detonated by spark) · Nuke · Mine

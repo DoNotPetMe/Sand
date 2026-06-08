@@ -34,6 +34,8 @@ pub enum Element {
     Blood,
     Mercury,
     Napalm,
+    MoltenMetal, // emergent: metal melted by heat, freezes back to metal
+    MoltenGlass, // emergent: sand/glass melted by heat, freezes to glass
     // --- gases ---------------------------------------------------------
     Steam,
     Smoke,
@@ -156,6 +158,8 @@ pub fn props(el: Element) -> Props {
         Blood => p("Blood", Liquid, M::Liquids, 11, (130, 20, 20), 14),
         Mercury => p("Mercury", Liquid, M::Liquids, 100, (190, 190, 200), 20),
         Napalm => p("Napalm", Liquid, M::Liquids, 9, (220, 120, 40), 30),
+        MoltenMetal => p("Molten Metal", Liquid, M::Liquids, 95, (235, 120, 40), 26),
+        MoltenGlass => p("Molten Glass", Liquid, M::Liquids, 35, (240, 165, 95), 24),
 
         // gases
         Steam => p("Steam", Gas, M::Gases, -8, (190, 190, 200), 16),
@@ -202,7 +206,8 @@ pub fn props(el: Element) -> Props {
 pub const ALL: &[Element] = &[
     Empty, Wall, Stone, Brick, Wood, Metal, Glass, Ice, Sand, Dirt, Salt, Coal,
     Gunpowder, Snow, Ash, Seed, Concrete, Water, SaltWater, Oil, Gasoline, Acid,
-    Lava, Blood, Mercury, Napalm, Steam, Smoke, Toxic, Methane, Fire, Plant,
+    Lava, Blood, Mercury, Napalm, MoltenMetal, MoltenGlass, Steam, Smoke, Toxic,
+    Methane, Fire, Plant,
     Ant, Person, Zombie, Fish, Virus, Ember, Bomb, Tnt, C4, Nuke, Mine, Grenade,
     Fireworks, Missile, Gun, Bullet, Laser, Meteor, Volcano, WaterSource,
     Cloner, Void, Heater, Cooler,
@@ -242,7 +247,7 @@ pub fn is_fluid(el: Element) -> bool {
 /// Conducts electrical charge.
 #[inline]
 pub fn conductive(el: Element) -> bool {
-    matches!(el, Metal | Water | SaltWater | Mercury)
+    matches!(el, Metal | MoltenMetal | Water | SaltWater | Mercury)
 }
 
 /// Can be eaten away by acid.
@@ -267,6 +272,8 @@ pub fn is_creature(el: Element) -> bool {
 pub fn natural_temp(el: Element) -> Option<f32> {
     match el {
         Lava => Some(1200.0),
+        MoltenMetal => Some(1150.0),
+        MoltenGlass => Some(1080.0),
         Meteor => Some(950.0),
         Volcano => Some(1100.0),
         Fire => Some(720.0),

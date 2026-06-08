@@ -144,6 +144,21 @@ impl World {
         }
     }
 
+    /// Swap a cell's material in place while *preserving its temperature*. Used
+    /// for heat-driven phase changes (melting/freezing) so a cell carries its
+    /// accumulated heat across the transition instead of snapping to a default.
+    fn morph(&mut self, i: usize, el: Element, life: u8) {
+        self.cells[i] = Cell {
+            el,
+            ra: gen_range(0, 255) as u8,
+            life,
+            charge: 0,
+            dir: 0,
+            timer: 0,
+            moved: true,
+        };
+    }
+
     /// Seed sensible life / heading / fuse values for elements that need them,
     /// for cells the *user* paints directly.
     fn init_special(&mut self, i: usize) {
@@ -1557,7 +1572,7 @@ impl World {
                 Napalm => self.temp[i] = self.temp[i].max(520.0),
                 Meteor => self.temp[i] = self.temp[i].max(700.0),
                 Volcano => self.temp[i] = self.temp[i].max(900.0),
-                Heater => self.temp[i] = self.temp[i].max(450.0),
+                Heater => self.temp[i] = self.temp[i].max(1250.0),
                 Cooler => self.temp[i] = self.temp[i].min(-30.0),
                 _ => {}
             }
@@ -1613,7 +1628,22 @@ impl World {
             Element::Coal if t >= 250.0 => self.spawn(x, y, Ember, gen_range(200, 255) as u8),
             Element::Methane if t >= 150.0 => self.spawn(x, y, Fire, gen_range(40, 90) as u8),
             Element::Gunpowder if t >= 150.0 => self.explode(x, y, 7),
-            Element::Metal if t >= 1200.0 => self.spawn(x, y, Element::Lava, 0),
+
+            // --- heat-driven melting & freezing (temperature preserved) -----
+            // Metal liquefies when hot enough and flows; it freezes back into
+            // solid metal once it cools, so a heated beam slumps into molten
+            // metal that pools and re-solidifies wherever it settles.
+            Element::Metal if t >= 1100.0 => self.morph(i, Element::MoltenMetal, 0),
+            Element::MoltenMetal if t <= 700.0 => self.morph(i, Element::Metal, 0),
+            // Sand and glass melt into molten glass, which sets into glass.
+            Element::Sand if t >= 950.0 => self.morph(i, Element::MoltenGlass, 0),
+            Element::Glass if t >= 1050.0 => self.morph(i, Element::MoltenGlass, 0),
+            Element::MoltenGlass if t <= 560.0 => self.morph(i, Element::Glass, 0),
+            // Rock itself melts into lava under extreme heat (meteors, nukes),
+            // and lava already freezes back to stone when it cools.
+            Element::Stone | Element::Brick if t >= 1400.0 => self.morph(i, Element::Lava, 0),
+            // Steam high up cools and condenses back into water (a slow cycle).
+            Element::Steam if t <= 40.0 && chance(10) => self.morph(i, Element::Water, 0),
             _ => {}
         }
     }
@@ -1646,6 +1676,25 @@ impl World {
                 // flickering burning goo
                 let f = (c.ra % 80) as u16;
                 [255, (70 + f) as u8, 20, 255]
+            }
+            Element::MoltenMetal => {
+                // glows from dull orange toward white-hot with temperature
+                let h = ((self.temp[i] - 700.0) / 700.0).clamp(0.0, 1.0);
+                [
+                    255,
+                    (110.0 + h * 145.0) as u8,
+                    (30.0 + h * 180.0) as u8,
+                    255,
+                ]
+            }
+            Element::MoltenGlass => {
+                let h = ((self.temp[i] - 560.0) / 700.0).clamp(0.0, 1.0);
+                [
+                    (235.0 + h * 20.0).min(255.0) as u8,
+                    (140.0 + h * 100.0) as u8,
+                    (70.0 + h * 150.0) as u8,
+                    255,
+                ]
             }
             Element::Meteor => {
                 // white-hot core with a flickering edge
@@ -1854,6 +1903,96 @@ mod tests {
             }
         }
         assert!(boom, "meteors should ignite fire/lava");
+    }
+
+    #[test]
+    fn heated_metal_melts_then_refreezes() {
+        let mut w = World::new();
+        // a short metal beam sitting on a wall floor
+        for x in 8..14 {
+            w.spawn(x, 21, Element::Wall, 0);
+            w.spawn(x, 20, Element::Metal, 0);
+        }
+        // crank the beam well past its melting point
+        for x in 8..14 {
+            w.temp[idx(x, 20)] = 1300.0;
+        }
+        let mut saw_molten = false;
+        for _ in 0..30 {
+            w.step();
+            if w.cells.iter().any(|c| c.el == Element::MoltenMetal) {
+                saw_molten = true;
+            }
+        }
+        assert!(saw_molten, "hot metal should melt into molten metal");
+
+        // now let everything cool: the molten metal should set back into solid
+        // metal somewhere in the world.
+        for _ in 0..600 {
+            w.step();
+        }
+        assert!(
+            !w.cells.iter().any(|c| c.el == Element::MoltenMetal),
+            "molten metal should have cooled and frozen"
+        );
+        assert!(
+            w.cells.iter().any(|c| c.el == Element::Metal),
+            "cooled molten metal should become solid metal again"
+        );
+    }
+
+    #[test]
+    fn sand_melts_into_glass() {
+        let mut w = World::new();
+        // a heap of sand on a wall floor; a single grain would shed its heat
+        // too fast, but a body of sand holds enough to cross the melt point.
+        for x in 8..14 {
+            w.spawn(x, 21, Element::Wall, 0);
+            for y in 18..21 {
+                w.spawn(x, y, Element::Sand, 0);
+                w.temp[idx(x, y)] = 1300.0;
+            }
+        }
+        let mut saw_molten = false;
+        for _ in 0..40 {
+            w.step();
+            if w.cells.iter().any(|c| c.el == Element::MoltenGlass) {
+                saw_molten = true;
+            }
+        }
+        assert!(saw_molten, "very hot sand should melt into molten glass");
+
+        // let it cool: the melt should set into solid glass
+        for _ in 0..800 {
+            w.step();
+        }
+        assert!(
+            w.cells.iter().any(|c| c.el == Element::Glass),
+            "molten glass should cool into solid glass"
+        );
+        assert!(
+            !w.cells.iter().any(|c| c.el == Element::MoltenGlass),
+            "no molten glass should remain once cooled"
+        );
+    }
+
+    #[test]
+    fn furnace_melts_metal() {
+        let mut w = World::new();
+        // metal fully enclosed by heater blocks acts like a furnace
+        w.spawn(15, 15, Element::Metal, 0);
+        for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
+            w.spawn(15 + dx, 15 + dy, Element::Heater, 0);
+        }
+        let mut melted = false;
+        for _ in 0..200 {
+            w.step();
+            if w.cells.iter().any(|c| c.el == Element::MoltenMetal) {
+                melted = true;
+                break;
+            }
+        }
+        assert!(melted, "a heater furnace should melt enclosed metal");
     }
 
     #[test]
