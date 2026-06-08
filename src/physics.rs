@@ -12,8 +12,43 @@ use macroquad::rand::gen_range;
 
 const GRAV: f32 = 0.42;
 const DAMP: f32 = 0.985;
-const ITERS: usize = 4;
+const ITERS: usize = 5;
 const MAXV: f32 = 6.0; // velocity clamp; swept collision keeps fast bodies from tunnelling
+
+// Particle indices for the humanoid skeleton (feet on the ground, head on top).
+const HEAD: usize = 0;
+const NECK: usize = 1;
+const CHEST: usize = 2;
+const PELVIS: usize = 3;
+const L_SHOULDER: usize = 4;
+const L_ELBOW: usize = 5;
+const L_HAND: usize = 6;
+const R_SHOULDER: usize = 7;
+const R_ELBOW: usize = 8;
+const R_HAND: usize = 9;
+const L_KNEE: usize = 10;
+const L_FOOT: usize = 11;
+const R_KNEE: usize = 12;
+const R_FOOT: usize = 13;
+const N: usize = 14;
+
+/// Standing rest pose: each joint's offset from the feet-centre, in grid cells.
+const POSE: [(f32, f32); N] = [
+    (0.0, -33.0),  // head
+    (0.0, -27.0),  // neck
+    (0.0, -23.0),  // chest
+    (0.0, -14.0),  // pelvis
+    (-4.0, -24.0), // L shoulder
+    (-6.5, -18.0), // L elbow
+    (-7.5, -12.0), // L hand
+    (4.0, -24.0),  // R shoulder
+    (6.5, -18.0),  // R elbow
+    (7.5, -12.0),  // R hand
+    (-3.0, -7.0),  // L knee
+    (-3.0, 0.0),   // L foot
+    (3.0, -7.0),   // R knee
+    (3.0, 0.0),    // R foot
+];
 
 /// The six damageable regions of a body.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -41,18 +76,18 @@ impl Part {
     /// Which particles make up this region (severing cuts links that cross out).
     fn particles(self) -> &'static [usize] {
         match self {
-            Part::Head => &[0],
-            Part::Torso => &[1, 2],
-            Part::ArmL => &[3, 4, 5],
-            Part::ArmR => &[6, 7, 8],
-            Part::LegL => &[9, 10],
-            Part::LegR => &[11, 12],
+            Part::Head => &[HEAD],
+            Part::Torso => &[NECK, CHEST, PELVIS],
+            Part::ArmL => &[L_SHOULDER, L_ELBOW, L_HAND],
+            Part::ArmR => &[R_SHOULDER, R_ELBOW, R_HAND],
+            Part::LegL => &[L_KNEE, L_FOOT],
+            Part::LegR => &[R_KNEE, R_FOOT],
         }
     }
     fn max_hp(self) -> f32 {
         match self {
             Part::Head => 45.0,
-            Part::Torso => 110.0,
+            Part::Torso => 120.0,
             Part::ArmL | Part::ArmR => 50.0,
             Part::LegL | Part::LegR => 60.0,
         }
@@ -62,11 +97,11 @@ impl Part {
 /// Which region a particle index belongs to (for damage routing & colour).
 fn particle_part(i: usize) -> Part {
     match i {
-        0 => Part::Head,
-        1 | 2 => Part::Torso,
-        3 | 4 | 5 => Part::ArmL,
-        6 | 7 | 8 => Part::ArmR,
-        9 | 10 => Part::LegL,
+        HEAD => Part::Head,
+        NECK | CHEST | PELVIS => Part::Torso,
+        L_SHOULDER | L_ELBOW | L_HAND => Part::ArmL,
+        R_SHOULDER | R_ELBOW | R_HAND => Part::ArmR,
+        L_KNEE | L_FOOT => Part::LegL,
         _ => Part::LegR,
     }
 }
@@ -106,39 +141,40 @@ pub struct Body {
     burn: [f32; 6], // remaining burn time per part
     char: [f32; 6], // 0..1 blackening for rendering
     severed: [bool; 6],
+    facing: f32,          // +1 faces right, -1 faces left (cosmetic)
+    anchor: Option<f32>,  // x the feet are planted at, for drift-free standing
     pub dead: bool,
 }
 
 impl Body {
-    /// Build a standing humanoid centred on (cx, cy) at the feet.
+    /// Build a standing humanoid whose feet rest at (cx, cy).
     fn human(cx: f32, cy: f32) -> Self {
-        // skeleton layout (head at top, feet at cy)
-        let pts = [
-            (0.0, -26.0), // 0 head
-            (0.0, -21.0), // 1 neck
-            (0.0, -12.0), // 2 pelvis
-            (-3.0, -20.0), // 3 L shoulder
-            (-5.0, -15.0), // 4 L elbow
-            (-5.0, -10.0), // 5 L hand
-            (3.0, -20.0),  // 6 R shoulder
-            (5.0, -15.0),  // 7 R elbow
-            (5.0, -10.0),  // 8 R hand
-            (-2.0, -6.0),  // 9 L knee
-            (-2.0, -1.0),  // 10 L foot
-            (2.0, -6.0),   // 11 R knee
-            (2.0, -1.0),   // 12 R foot
-        ];
-        let particles: Vec<Particle> =
-            pts.iter().map(|&(dx, dy)| Particle::new(cx + dx, cy + dy)).collect();
+        let particles: Vec<Particle> = POSE
+            .iter()
+            .map(|&(dx, dy)| Particle::new(cx + dx, cy + dy))
+            .collect();
 
+        // limbs first, then internal bracing so the torso keeps its shape
         let links = [
-            (0, 1), // head-neck
-            (1, 2), // spine
-            (1, 3), (3, 4), (4, 5), // left arm
-            (1, 6), (6, 7), (7, 8), // right arm
-            (2, 9), (9, 10),        // left leg
-            (2, 11), (11, 12),      // right leg
-            (3, 6), (3, 2), (6, 2), // torso bracing
+            (HEAD, NECK),
+            (NECK, CHEST),
+            (CHEST, PELVIS),
+            (CHEST, L_SHOULDER),
+            (L_SHOULDER, L_ELBOW),
+            (L_ELBOW, L_HAND),
+            (CHEST, R_SHOULDER),
+            (R_SHOULDER, R_ELBOW),
+            (R_ELBOW, R_HAND),
+            (PELVIS, L_KNEE),
+            (L_KNEE, L_FOOT),
+            (PELVIS, R_KNEE),
+            (R_KNEE, R_FOOT),
+            // bracing
+            (L_SHOULDER, R_SHOULDER),
+            (L_SHOULDER, PELVIS),
+            (R_SHOULDER, PELVIS),
+            (HEAD, CHEST),
+            (L_KNEE, R_KNEE),
         ];
         let sticks = links
             .iter()
@@ -160,53 +196,9 @@ impl Body {
             burn: [0.0; 6],
             char: [0.0; 6],
             severed: [false; 6],
+            facing: if gen_range(0, 2) == 0 { 1.0 } else { -1.0 },
+            anchor: None,
             dead: false,
-        }
-    }
-
-    /// A living person actively holds itself upright: while at least one foot
-    /// is supported, gently steer the pelvis above the feet and the head above
-    /// the pelvis. Weak enough to be shoved over (and flung), and it switches
-    /// off at death so corpses go limp.
-    fn balance(&mut self, world: &World) {
-        if self.dead || self.severed[Part::LegL.idx()] && self.severed[Part::LegR.idx()] {
-            return;
-        }
-        let foot_l = self.particles[10];
-        let foot_r = self.particles[12];
-        let supported = world.solid_at(foot_l.x, foot_l.y + 1.3)
-            || world.solid_at(foot_r.x, foot_r.y + 1.3);
-        if !supported {
-            return;
-        }
-        let fx = (foot_l.x + foot_r.x) * 0.5;
-        let fy = foot_l.y.min(foot_r.y);
-        let k = 0.35;
-        // Pull the torso + legs toward an upright pose relative to the planted
-        // feet. Arms are left free to dangle. The correction moves a point and
-        // its Verlet history together, so it injects no velocity and stays
-        // grab/throw-friendly (and it's gated on foot support, so a body flung
-        // into the air just ragdolls).
-        const POSE: &[(usize, f32, f32)] = &[
-            (0, 0.0, -25.0),  // head
-            (1, 0.0, -20.0),  // neck
-            (2, 0.0, -11.0),  // pelvis
-            (3, -3.0, -19.0), // L shoulder
-            (6, 3.0, -19.0),  // R shoulder
-            (9, -1.5, -6.0),  // L knee
-            (11, 1.5, -6.0),  // R knee
-        ];
-        for &(i, dx, dy) in POSE {
-            let p = &mut self.particles[i];
-            if p.pinned {
-                continue;
-            }
-            let cx = (fx + dx - p.x) * k;
-            let cy = (fy + dy - p.y) * k;
-            p.x += cx;
-            p.y += cy;
-            p.px += cx;
-            p.py += cy;
         }
     }
 
@@ -251,7 +243,7 @@ impl Body {
         }
         // gush of blood at the stump
         let (x, y) = self.part_pos(part);
-        for _ in 0..14 {
+        for _ in 0..16 {
             let bx = x as i32 + gen_range(-2, 3);
             let by = y as i32 + gen_range(-2, 3);
             world.drip(bx, by, Element::Blood);
@@ -291,6 +283,11 @@ impl Body {
                     p.y += sy;
                 }
             }
+            // standing friction: a point resting on the ground shouldn't glide
+            if world.solid_at(p.x, p.y + 1.0) {
+                let vx = p.x - p.px;
+                p.px = p.x - vx * 0.25; // keep 25% of horizontal speed -> quick stop
+            }
         }
     }
 
@@ -322,6 +319,61 @@ impl Body {
                 collide(p, world);
             }
         }
+    }
+
+    /// A living person actively holds itself upright: while at least one foot is
+    /// supported, steer the torso and legs toward the standing rest pose (arms
+    /// and forearms stay free to dangle). Weak enough to be shoved over and
+    /// flung; switches off at death so corpses go limp.
+    fn balance(&mut self, world: &World) {
+        let legless = self.severed[Part::LegL.idx()] && self.severed[Part::LegR.idx()];
+        if self.dead || legless {
+            return;
+        }
+        let foot_l = self.particles[L_FOOT];
+        let foot_r = self.particles[R_FOOT];
+        let supported = world.solid_at(foot_l.x, foot_l.y + 1.3)
+            || world.solid_at(foot_r.x, foot_r.y + 1.3);
+        if !supported {
+            self.anchor = None; // lifted off the ground -> re-plant on landing
+            return;
+        }
+        let center = (foot_l.x + foot_r.x) * 0.5;
+        // Anchor the stance to an absolute x so tiny solver asymmetries can't
+        // make a standing person glide. Within a small deadband the anchor holds
+        // firm (zero drift); shove them past it and the stance re-plants where
+        // they stumble to.
+        let a = self.anchor.get_or_insert(center);
+        if (center - *a).abs() > 5.0 {
+            *a = center;
+        }
+        let fx = *a;
+        let fy = foot_l.y.min(foot_r.y);
+        let k = 0.4;
+        // Positional correction that moves a point *and* its Verlet history
+        // together, so it injects no velocity (stays grab/throw-friendly).
+        let correct = |p: &mut Particle, tx: f32, ty: f32| {
+            if p.pinned {
+                return;
+            }
+            let cx = (tx - p.x) * k;
+            let cy = (ty - p.y) * k;
+            p.x += cx;
+            p.y += cy;
+            p.px += cx;
+            p.py += cy;
+        };
+        // upright spine + braced shoulders + knees over the feet
+        for &i in &[HEAD, NECK, CHEST, PELVIS, L_SHOULDER, R_SHOULDER, L_KNEE, R_KNEE] {
+            let (dx, dy) = POSE[i];
+            // keep knees over their own foot (POSE x is relative to centre)
+            correct(&mut self.particles[i], fx + dx, fy + dy);
+        }
+        // hold a planted stance so the legs don't scissor together
+        let cx = (foot_l.x + foot_r.x) * 0.5;
+        let (lfy, rfy) = (self.particles[L_FOOT].y, self.particles[R_FOOT].y);
+        correct(&mut self.particles[L_FOOT], cx - 3.0, lfy);
+        correct(&mut self.particles[R_FOOT], cx + 3.0, rfy);
     }
 }
 
@@ -410,7 +462,7 @@ impl Ragdolls {
 
     /// Grab the nearest particle within reach (grid coords).
     pub fn grab(&mut self, mx: f32, my: f32) {
-        let mut best = 7.0f32 * 7.0;
+        let mut best = 9.0f32 * 9.0;
         let mut found = None;
         for (bi, body) in self.bodies.iter().enumerate() {
             for (pi, p) in body.particles.iter().enumerate() {
@@ -482,63 +534,71 @@ impl Ragdolls {
 
     pub fn draw(&self, scale: f32, ox: f32, oy: f32) {
         for body in &self.bodies {
-            // limbs
-            for s in &body.sticks {
-                if s.broken {
+            let px = |i: usize| body.particles[i].x * scale + ox;
+            let py = |i: usize| body.particles[i].y * scale + oy;
+
+            // fleshy limbs: each bone is a thick capsule (line + rounded joints).
+            // proximal bones vanish when their limb is severed.
+            for &(a, b, th, part, proximal) in BONES {
+                if proximal && body.severed[part.idx()] {
                     continue;
                 }
-                let a = &body.particles[s.a];
-                let b = &body.particles[s.b];
-                let part = pick_part(s.a, s.b);
                 let col = body_color(body, part);
-                let thick = match part {
-                    Part::Torso | Part::LegL | Part::LegR => scale * 2.1,
-                    _ => scale * 1.6,
-                };
-                draw_line(
-                    a.x * scale + ox,
-                    a.y * scale + oy,
-                    b.x * scale + ox,
-                    b.y * scale + oy,
-                    thick,
-                    col,
-                );
+                draw_line(px(a), py(a), px(b), py(b), th * scale, col);
             }
-            // head
-            if !body.severed[Part::Head.idx()] || true {
-                let h = &body.particles[0];
-                let col = body_color(body, Part::Head);
-                draw_circle(h.x * scale + ox, h.y * scale + oy, scale * 2.4, col);
+            // round the joints so the capsules read as one continuous body
+            for i in 1..body.particles.len() {
+                let part = particle_part(i);
+                draw_circle(px(i), py(i), JOINT_R[i] * scale, body_color(body, part));
+            }
+            // head + a little face dot for orientation
+            let hcol = body_color(body, Part::Head);
+            draw_circle(px(HEAD), py(HEAD), 3.4 * scale, hcol);
+            if !body.severed[Part::Head.idx()] && body.char[Part::Head.idx()] < 0.6 {
+                let fx = px(HEAD) + body.facing * 1.4 * scale;
+                draw_circle(fx, py(HEAD) - 0.3 * scale, 0.6 * scale, Color::from_rgba(30, 25, 25, 255));
             }
         }
     }
 }
 
-/// Choose which region colours a link (prefer the limb end over the torso).
-fn pick_part(a: usize, b: usize) -> Part {
-    let pa = particle_part(a);
-    let pb = particle_part(b);
-    if matches!(pa, Part::Torso) {
-        pb
-    } else {
-        pa
-    }
-}
+// Visible bones: (a, b, thickness, colour-part, proximal?). Proximal bones are
+// the ones that attach a limb to the trunk, and disappear when it's severed.
+const BONES: &[(usize, usize, f32, Part, bool)] = &[
+    (NECK, CHEST, 3.0, Part::Torso, false),
+    (CHEST, PELVIS, 4.2, Part::Torso, false),
+    (HEAD, NECK, 1.9, Part::Torso, false),
+    (CHEST, L_SHOULDER, 2.6, Part::ArmL, true),
+    (L_SHOULDER, L_ELBOW, 2.3, Part::ArmL, false),
+    (L_ELBOW, L_HAND, 2.0, Part::ArmL, false),
+    (CHEST, R_SHOULDER, 2.6, Part::ArmR, true),
+    (R_SHOULDER, R_ELBOW, 2.3, Part::ArmR, false),
+    (R_ELBOW, R_HAND, 2.0, Part::ArmR, false),
+    (PELVIS, L_KNEE, 3.0, Part::LegL, true),
+    (L_KNEE, L_FOOT, 2.6, Part::LegL, false),
+    (PELVIS, R_KNEE, 3.0, Part::LegR, true),
+    (R_KNEE, R_FOOT, 2.6, Part::LegR, false),
+];
+
+// Joint disc radius per particle (index 0/head drawn separately).
+const JOINT_R: [f32; N] = [
+    0.0, 1.0, 2.1, 2.1, 1.3, 1.1, 1.2, 1.3, 1.1, 1.2, 1.4, 1.4, 1.4, 1.4,
+];
 
 fn body_color(body: &Body, part: Part) -> Color {
     let i = part.idx();
     let frac = (body.hp[i] / part.max_hp()).clamp(0.0, 1.0);
     // healthy flesh -> wounded dark red
-    let flesh = (235.0, 180.0, 150.0);
-    let wound = (135.0, 35.0, 35.0);
+    let flesh = (236.0, 188.0, 158.0);
+    let wound = (140.0, 38.0, 38.0);
     let mut r = wound.0 + (flesh.0 - wound.0) * frac;
     let mut g = wound.1 + (flesh.1 - wound.1) * frac;
     let mut b = wound.2 + (flesh.2 - wound.2) * frac;
     // blacken with char
     let c = body.char[i].clamp(0.0, 1.0);
-    r += (35.0 - r) * c;
-    g += (28.0 - g) * c;
-    b += (26.0 - b) * c;
+    r += (32.0 - r) * c;
+    g += (26.0 - g) * c;
+    b += (24.0 - b) * c;
     Color::from_rgba(r as u8, g as u8, b as u8, 255)
 }
 
@@ -577,10 +637,7 @@ fn environment(body: &mut Body, world: &mut World) {
 
         // electricity: violent spasms + damage
         if world.charge_at(gx, gy) > 0 {
-            body.particles[i].shove(
-                gen_range(-2.0, 2.0),
-                gen_range(-2.5, 1.5),
-            );
+            body.particles[i].shove(gen_range(-2.0, 2.0), gen_range(-2.5, 1.5));
             if gen_range(0, 4) == 0 {
                 body.hurt(part, 2.0, world);
             }
@@ -632,7 +689,6 @@ mod tests {
         assert_eq!(r.count(), 1, "intact body should survive a quiet drop");
         for p in &r.bodies[0].particles {
             assert!(p.x.is_finite() && p.y.is_finite(), "no NaNs in the sim");
-            // shouldn't sink past the stone floor
             assert!(p.y <= (H - 2) as f32 + 1.0, "body fell through the floor");
         }
     }
@@ -648,13 +704,33 @@ mod tests {
             r.step(&mut w);
         }
         let b = &r.bodies[0];
-        let head_y = b.particles[0].y;
-        let foot_y = b.particles[10].y.max(b.particles[12].y);
+        let head_y = b.particles[HEAD].y;
+        let foot_y = b.particles[L_FOOT].y.max(b.particles[R_FOOT].y);
         assert!(
-            foot_y - head_y > 12.0,
-            "a living person should stand (head above feet), got {}",
+            foot_y - head_y > 20.0,
+            "a living person should stand tall (head above feet), got {}",
             foot_y - head_y
         );
+    }
+
+    #[test]
+    fn body_does_not_slide() {
+        let mut w = World::new();
+        floor(&mut w);
+        let mut r = Ragdolls::new();
+        r.spawn_human(60.0, (H - 4) as f32);
+        // let it settle, then check it stays put over many frames
+        for _ in 0..120 {
+            w.step();
+            r.step(&mut w);
+        }
+        let x0 = r.bodies[0].particles[PELVIS].x;
+        for _ in 0..200 {
+            w.step();
+            r.step(&mut w);
+        }
+        let x1 = r.bodies[0].particles[PELVIS].x;
+        assert!((x1 - x0).abs() < 4.0, "a standing person should not glide, drifted {}", x1 - x0);
     }
 
     #[test]
@@ -662,7 +738,7 @@ mod tests {
         let mut w = World::new();
         let mut r = Ragdolls::new();
         r.spawn_human(160.0, 100.0);
-        let before = r.bodies[0].particles[2].x;
+        let before = r.bodies[0].particles[CHEST].x;
         // a blast to the left should shove the body rightward
         w.blasts.push(Blast { x: 150.0, y: 100.0, r: 40.0, power: 30.0 });
         r.step(&mut w);
@@ -670,7 +746,7 @@ mod tests {
         for _ in 0..6 {
             r.step(&mut w);
         }
-        let after = r.bodies[0].particles[2].x;
+        let after = r.bodies[0].particles[CHEST].x;
         assert!(after > before + 1.0, "blast should fling the body away");
     }
 
