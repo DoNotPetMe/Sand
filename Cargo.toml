@@ -1,0 +1,18 @@
+[package]
+name = "sand"
+version = "0.1.0"
+edition = "2021"
+description = "An advanced native falling-sand sandbox with heat physics, chemistry and life"
+
+[dependencies]
+macroquad = "0.4"
+
+# A falling-sand simulator is murder on debug-mode performance.
+# Optimize even unoptimized dev builds so the sandbox stays interactive.
+[profile.dev]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
