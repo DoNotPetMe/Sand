@@ -9,6 +9,7 @@
 //! Keeping space (temperature) and matter (cells) in separate arrays makes the
 //! heat diffusion pass cache-friendly.
 
+use crate::element::Element::*;
 use crate::element::*;
 use macroquad::rand::gen_range;
 
@@ -23,8 +24,10 @@ const HEAT_RELAX: f32 = 0.004; // pull back toward ambient (radiative loss)
 pub struct Cell {
     pub el: Element,
     pub ra: u8,     // colour jitter seed
-    pub life: u8,   // generic countdown (fire/smoke lifetime, ember fuel, ...)
+    pub life: u8,   // generic countdown / health (fire lifetime, person HP, ...)
     pub charge: u8, // electrical charge level
+    pub dir: u8,    // facing/heading: 1=up 2=down 3=left 4=right (projectiles, creatures)
+    pub timer: u8,  // misc countdown / stored state (fuses, cooldowns, cloner material)
     pub moved: bool,
 }
 
@@ -34,8 +37,22 @@ impl Cell {
         ra: 0,
         life: 0,
         charge: 0,
+        dir: 0,
+        timer: 0,
         moved: false,
     };
+}
+
+/// Decode a heading byte into a unit (dx, dy) step.
+#[inline]
+fn dir_delta(dir: u8) -> (i32, i32) {
+    match dir {
+        1 => (0, -1),
+        2 => (0, 1),
+        3 => (-1, 0),
+        4 => (1, 0),
+        _ => (0, -1),
+    }
 }
 
 pub struct World {
@@ -103,10 +120,45 @@ impl World {
             ra: gen_range(0, 255) as u8,
             life,
             charge: 0,
+            dir: 0,
+            timer: 0,
             moved: true,
         };
         if let Some(t) = natural_temp(el) {
             self.temp[i] = t;
+        }
+    }
+
+    /// Seed sensible life / heading / fuse values for elements that need them,
+    /// for cells the *user* paints directly.
+    fn init_special(&mut self, i: usize) {
+        let el = self.cells[i].el;
+        let c = &mut self.cells[i];
+        match el {
+            Element::Person | Element::Zombie => {
+                c.life = 100;
+                c.dir = if gen_range(0, 2) == 0 { 3 } else { 4 };
+            }
+            Element::Fish => c.life = 90,
+            Element::Grenade => c.timer = gen_range(70, 140) as u8,
+            Element::Fireworks => {
+                c.life = gen_range(45, 80) as u8;
+                c.dir = 1; // launches upward
+            }
+            Element::Missile => {
+                c.life = 255;
+                c.dir = 1;
+            }
+            Element::Bullet => {
+                c.life = 110;
+                c.dir = 4;
+            }
+            Element::Gun => {
+                c.dir = 4; // fires to the right
+                c.timer = gen_range(20, 40) as u8;
+            }
+            Element::Laser => c.dir = 2, // beams downward
+            _ => {}
         }
     }
 
@@ -151,11 +203,14 @@ impl World {
                             ra: gen_range(0, 255) as u8,
                             life,
                             charge: 0,
+                            dir: 0,
+                            timer: 0,
                             moved: true,
                         };
                         if let Some(t) = natural_temp(el) {
                             self.temp[i] = t;
                         }
+                        self.init_special(i);
                     }
                 }
             }
@@ -211,19 +266,36 @@ impl World {
             return;
         }
         match c.el {
-            Element::Empty | Element::Wall | Element::Stone | Element::Glass
-            | Element::Metal => {}
-            Element::Fire => self.update_fire(x, y),
-            Element::Ember => self.update_ember(x, y),
-            Element::Smoke | Element::Toxic => self.update_fading_gas(x, y),
-            Element::Steam => self.update_steam(x, y),
-            Element::Acid => self.update_acid(x, y),
-            Element::Plant => self.update_plant(x, y),
-            Element::Seed => self.update_seed(x, y),
-            Element::Ant => self.update_ant(x, y),
-            Element::Bomb => self.update_bomb(x, y),
-            Element::Salt => self.update_salt(x, y),
-            Element::WaterSource => self.update_source(x, y),
+            Empty | Wall | Stone | Brick | Glass | Metal => {}
+            Fire => self.update_fire(x, y),
+            Ember => self.update_ember(x, y),
+            Smoke | Toxic => self.update_fading_gas(x, y),
+            Steam => self.update_steam(x, y),
+            Acid => self.update_acid(x, y),
+            Napalm => self.update_napalm(x, y),
+            Plant => self.update_plant(x, y),
+            Seed => self.update_seed(x, y),
+            Ant => self.update_ant(x, y),
+            Person => self.update_person(x, y),
+            Zombie => self.update_zombie(x, y),
+            Fish => self.update_fish(x, y),
+            Virus => self.update_virus(x, y),
+            Salt => self.update_salt(x, y),
+            Concrete => self.update_concrete(x, y),
+            Bomb => self.update_bomb(x, y),
+            Tnt => self.update_tnt(x, y),
+            C4 => self.update_c4(x, y),
+            Nuke => self.update_nuke(x, y),
+            Mine => self.update_mine(x, y),
+            Grenade => self.update_grenade(x, y),
+            Fireworks => self.update_fireworks(x, y),
+            Missile => self.update_missile(x, y),
+            Bullet => self.update_bullet(x, y),
+            Gun => self.update_gun(x, y),
+            Laser => self.update_laser(x, y),
+            WaterSource => self.update_source(x, y),
+            Cloner => self.update_cloner(x, y),
+            Void => self.update_void(x, y),
             other => match props(other).cat {
                 Cat::Powder => {
                     self.update_powder(x, y);
@@ -592,6 +664,571 @@ impl World {
         }
     }
 
+    /// A much larger blast: an incinerating core, a radioactive smoke/toxic
+    /// fallout ring, and a huge thermal spike.
+    fn nuke_blast(&mut self, cx: i32, cy: i32) {
+        let r = 46;
+        for dy in -r..=r {
+            for dx in -r..=r {
+                let d2 = dx * dx + dy * dy;
+                if d2 > r * r {
+                    continue;
+                }
+                let (x, y) = (cx + dx, cy + dy);
+                if !in_bounds(x, y) {
+                    continue;
+                }
+                let i = idx(x, y);
+                let roll = gen_range(0, 100);
+                if (d2 as f32) < (r as f32 * 0.45).powi(2) {
+                    if roll < 70 {
+                        self.spawn(x, y, Fire, gen_range(80, 180) as u8);
+                    } else {
+                        self.cells[i] = Cell::EMPTY;
+                    }
+                    self.temp[i] = 2200.0;
+                } else if self.el_at(x, y) != Wall {
+                    if roll < 25 {
+                        self.spawn(x, y, Fire, gen_range(40, 120) as u8);
+                    } else if roll < 50 {
+                        self.spawn(x, y, Smoke, gen_range(120, 220) as u8);
+                    } else if roll < 62 {
+                        self.spawn(x, y, Toxic, gen_range(150, 255) as u8);
+                    } else if roll < 75 {
+                        self.cells[i] = Cell::EMPTY;
+                    }
+                    self.temp[i] = 950.0;
+                }
+            }
+        }
+    }
+
+    // ---- movement helpers for creatures & projectiles ---------------------
+
+    /// Swap two cells outright (used by creatures swimming/walking through
+    /// fluids regardless of density).
+    fn swap_cells(&mut self, x: i32, y: i32, nx: i32, ny: i32) {
+        if !in_bounds(nx, ny) {
+            return;
+        }
+        let i = idx(x, y);
+        let j = idx(nx, ny);
+        let mut a = self.cells[i];
+        let mut b = self.cells[j];
+        a.moved = true;
+        b.moved = true;
+        self.cells[j] = a;
+        self.cells[i] = b;
+        self.temp.swap(i, j);
+    }
+
+    /// Move a cell into an assumed-passable destination, clearing the origin.
+    fn relocate(&mut self, x: i32, y: i32, nx: i32, ny: i32) {
+        let i = idx(x, y);
+        let j = idx(nx, ny);
+        let mut c = self.cells[i];
+        c.moved = true;
+        self.cells[j] = c;
+        self.cells[i] = Cell::EMPTY;
+        self.temp.swap(i, j);
+    }
+
+    /// Cells a projectile flies through without stopping: air and gases.
+    fn proj_passable(&self, x: i32, y: i32) -> bool {
+        if !in_bounds(x, y) {
+            return false;
+        }
+        let e = self.el_at(x, y);
+        e == Empty || props(e).cat == Cat::Gas
+    }
+
+    // ---- burning liquids --------------------------------------------------
+
+    fn update_napalm(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        let mut c = self.cells[i];
+        if self.has_neighbor(x, y, &[Water, SaltWater]) && chance(2) {
+            self.spawn(x, y, Smoke, gen_range(40, 90) as u8);
+            return;
+        }
+        if c.life == 0 {
+            if chance(2) {
+                self.spawn(x, y, Ash, 0);
+            } else {
+                self.spawn(x, y, Smoke, gen_range(60, 120) as u8);
+            }
+            return;
+        }
+        c.life -= 1;
+        self.cells[i] = c;
+        // throw flames into the air around it
+        for (dx, dy) in [(0, -1), (1, 0), (-1, 0)] {
+            if self.el_at(x + dx, y + dy) == Empty && chance(3) {
+                self.spawn(x + dx, y + dy, Fire, gen_range(20, 50) as u8);
+            }
+        }
+        // sticky: only creeps occasionally
+        if chance(2) {
+            self.update_liquid(x, y);
+        }
+    }
+
+    fn update_concrete(&mut self, x: i32, y: i32) {
+        if self.update_powder(x, y) {
+            return; // still settling
+        }
+        let i = idx(x, y);
+        let mut c = self.cells[i];
+        c.timer = c.timer.saturating_add(1);
+        if c.timer > 50 {
+            self.spawn(x, y, Stone, 0); // cured into rock
+            return;
+        }
+        self.cells[i] = c;
+    }
+
+    // ---- people & creatures -----------------------------------------------
+
+    fn update_person(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        let mut c = self.cells[i];
+        let mut hp = c.life as i32;
+        let mut flee = 0i32;
+        for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
+            match self.el_at(x + dx, y + dy) {
+                Fire | Ember => {
+                    hp -= 8;
+                    flee = -dx;
+                }
+                Napalm => {
+                    hp -= 25;
+                    flee = -dx;
+                }
+                Lava => hp -= 60,
+                Acid => hp -= 20,
+                Toxic => hp -= 2,
+                Water | SaltWater => hp -= 3, // drowning
+                _ => {}
+            }
+        }
+        if hp <= 0 {
+            self.spawn(x, y, Blood, 0);
+            for (dx, dy) in [(1, 0), (-1, 0), (0, -1)] {
+                if self.el_at(x + dx, y + dy) == Empty && chance(2) {
+                    self.spawn(x + dx, y + dy, Blood, 0);
+                }
+            }
+            return;
+        }
+        c.life = hp.min(100) as u8;
+        // flee fire by turning away from it
+        if flee > 0 {
+            c.dir = 4;
+        } else if flee < 0 {
+            c.dir = 3;
+        } else if chance(60) {
+            c.dir = if c.dir == 3 { 4 } else { 3 };
+        }
+        self.cells[i] = c;
+
+        // gravity
+        if self.el_at(x, y + 1) == Empty {
+            self.try_move(x, y, x, y + 1, true);
+            return;
+        }
+        // sink in liquids
+        if is_fluid(self.el_at(x, y + 1)) {
+            self.try_move(x, y, x, y + 1, true);
+            return;
+        }
+        // walk, climbing one-cell steps
+        let step = if c.dir == 3 { -1 } else { 1 };
+        let ahead = self.el_at(x + step, y);
+        if ahead == Empty {
+            self.try_move(x, y, x + step, y, true);
+        } else if ahead != Wall
+            && !is_fluid(ahead)
+            && self.el_at(x + step, y - 1) == Empty
+            && self.el_at(x, y - 1) == Empty
+        {
+            self.try_move(x, y, x + step, y - 1, true);
+        } else {
+            let mut nc = self.cells[i];
+            nc.dir = if step < 0 { 4 } else { 3 };
+            self.cells[i] = nc;
+        }
+    }
+
+    fn update_zombie(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        let mut c = self.cells[i];
+        let mut hp = c.life as i32;
+        for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
+            match self.el_at(x + dx, y + dy) {
+                Fire | Ember | Napalm => hp -= 12,
+                Lava => hp -= 60,
+                Acid => hp -= 25,
+                // bite a person and turn them
+                Person => {
+                    self.spawn(x + dx, y + dy, Zombie, 100);
+                }
+                _ => {}
+            }
+        }
+        if hp <= 0 {
+            self.spawn(x, y, Blood, 0);
+            return;
+        }
+        c.life = hp.min(100) as u8;
+        // hunt: turn toward the nearest person on either side
+        let mut target_dir = 0i32;
+        for d in 1..7 {
+            if self.el_at(x + d, y) == Person {
+                target_dir = 1;
+                break;
+            }
+            if self.el_at(x - d, y) == Person {
+                target_dir = -1;
+                break;
+            }
+        }
+        if target_dir > 0 {
+            c.dir = 4;
+        } else if target_dir < 0 {
+            c.dir = 3;
+        } else if chance(40) {
+            c.dir = if c.dir == 3 { 4 } else { 3 };
+        }
+        self.cells[i] = c;
+
+        if self.el_at(x, y + 1) == Empty {
+            self.try_move(x, y, x, y + 1, true);
+            return;
+        }
+        let step = if c.dir == 3 { -1 } else { 1 };
+        let ahead = self.el_at(x + step, y);
+        if ahead == Empty {
+            self.try_move(x, y, x + step, y, true);
+        } else if ahead != Wall
+            && !is_fluid(ahead)
+            && self.el_at(x + step, y - 1) == Empty
+        {
+            self.try_move(x, y, x + step, y - 1, true);
+        } else {
+            let mut nc = self.cells[i];
+            nc.dir = if step < 0 { 4 } else { 3 };
+            self.cells[i] = nc;
+        }
+    }
+
+    fn update_fish(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        let mut c = self.cells[i];
+        let mut hp = c.life as i32;
+        if self.has_neighbor(x, y, &[Fire, Lava, Acid]) {
+            hp -= 40;
+        }
+        let watery = self.has_neighbor(x, y, &[Water, SaltWater]);
+        if !watery {
+            hp -= 6; // suffocating in open air
+        }
+        if hp <= 0 {
+            self.spawn(x, y, Blood, 0);
+            return;
+        }
+        c.life = hp.min(100) as u8;
+        self.cells[i] = c;
+        // swim toward water
+        let order = [(0, 1), (0, -1), (1, 0), (-1, 0)];
+        let start = gen_range(0, 4) as usize;
+        for k in 0..4 {
+            let (dx, dy) = order[(start + k) % 4];
+            if matches!(self.el_at(x + dx, y + dy), Water | SaltWater) {
+                self.swap_cells(x, y, x + dx, y + dy);
+                return;
+            }
+        }
+        // flop out of water
+        if self.el_at(x, y + 1) == Empty {
+            self.try_move(x, y, x, y + 1, true);
+        }
+    }
+
+    fn update_virus(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        let mut c = self.cells[i];
+        if self.has_neighbor(x, y, &[Fire, Ember, Lava, Acid]) {
+            self.spawn(x, y, Ash, 0); // sterilised
+            return;
+        }
+        if c.life == 0 {
+            self.cells[i] = Cell::EMPTY; // burns itself out
+            return;
+        }
+        c.life -= 1;
+        self.cells[i] = c;
+        let (dx, dy) = [(0, 1), (0, -1), (1, 0), (-1, 0)][gen_range(0, 4) as usize];
+        let t = self.el_at(x + dx, y + dy);
+        if matches!(t, Person | Zombie | Fish | Ant | Plant | Wood | Seed) && chance(3) {
+            self.spawn(x + dx, y + dy, Virus, gen_range(180, 255) as u8);
+        }
+    }
+
+    // ---- weapons ----------------------------------------------------------
+
+    fn update_tnt(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        if self.cells[i].charge > 0
+            || self.temp[i] > 180.0
+            || self.has_neighbor(x, y, &[Fire, Ember, Lava])
+        {
+            self.explode(x, y, 24);
+            return;
+        }
+        self.update_powder(x, y);
+    }
+
+    fn update_c4(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        // stable except under a detonator charge or extreme heat
+        if self.cells[i].charge > 0 || self.temp[i] > 400.0 {
+            self.explode(x, y, 20);
+        }
+    }
+
+    fn update_nuke(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        if self.cells[i].charge > 0
+            || self.temp[i] > 300.0
+            || self.has_neighbor(x, y, &[Fire, Ember, Lava])
+        {
+            self.nuke_blast(x, y);
+        }
+    }
+
+    fn update_mine(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        if self.cells[i].charge > 0 {
+            self.explode(x, y, 12);
+            return;
+        }
+        for (dx, dy) in [
+            (0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1),
+        ] {
+            if is_creature(self.el_at(x + dx, y + dy)) {
+                self.explode(x, y, 12);
+                return;
+            }
+        }
+    }
+
+    fn update_grenade(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        let mut c = self.cells[i];
+        if self.has_neighbor(x, y, &[Fire, Ember, Lava]) || c.timer <= 1 {
+            self.explode(x, y, 13);
+            return;
+        }
+        c.timer -= 1;
+        self.cells[i] = c;
+        self.update_powder(x, y);
+    }
+
+    fn update_fireworks(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        let mut c = self.cells[i];
+        let (dx, dy) = dir_delta(c.dir);
+        if c.life <= 1 || !self.proj_passable(x + dx, y + dy) {
+            self.firework_burst(x, y);
+            self.cells[idx(x, y)] = Cell::EMPTY;
+            return;
+        }
+        c.life -= 1;
+        self.cells[i] = c;
+        self.relocate(x, y, x + dx, y + dy);
+        if chance(2) {
+            self.spawn(x, y, Fire, gen_range(6, 16) as u8); // spark trail
+        }
+    }
+
+    fn firework_burst(&mut self, cx: i32, cy: i32) {
+        let r = 7;
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if dx * dx + dy * dy > r * r {
+                    continue;
+                }
+                let (x, y) = (cx + dx, cy + dy);
+                if self.el_at(x, y) == Empty && chance(2) {
+                    self.spawn(x, y, Fire, gen_range(20, 70) as u8);
+                }
+            }
+        }
+    }
+
+    fn update_missile(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        let mut c = self.cells[i];
+        let (dx, dy) = dir_delta(c.dir);
+        if c.life <= 1 {
+            self.explode(x, y, 11);
+            return;
+        }
+        c.life -= 1;
+        self.cells[i] = c;
+        let (mut cx, mut cy) = (x, y);
+        let mut hit = false;
+        for _ in 0..2 {
+            if self.proj_passable(cx + dx, cy + dy) {
+                cx += dx;
+                cy += dy;
+            } else {
+                hit = true;
+                break;
+            }
+        }
+        if (cx, cy) != (x, y) {
+            self.relocate(x, y, cx, cy);
+            self.spawn(x, y, if chance(2) { Smoke } else { Fire }, gen_range(20, 50) as u8);
+            self.temp[idx(x, y)] = 400.0;
+        }
+        if hit {
+            self.explode(cx, cy, 13);
+        }
+    }
+
+    fn update_bullet(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        let mut c = self.cells[i];
+        if c.life == 0 {
+            self.cells[i] = Cell::EMPTY;
+            return;
+        }
+        c.life = c.life.saturating_sub(4); // limited range
+        self.cells[i] = c;
+        let (dx, dy) = dir_delta(c.dir);
+        let (mut cx, mut cy) = (x, y);
+        let mut stop = false;
+        for _ in 0..3 {
+            let (nx, ny) = (cx + dx, cy + dy);
+            if !in_bounds(nx, ny) {
+                stop = true;
+                break;
+            }
+            let t = self.el_at(nx, ny);
+            if t == Empty || props(t).cat == Cat::Gas || props(t).cat == Cat::Liquid {
+                cx = nx;
+                cy = ny;
+            } else if is_creature(t) {
+                self.spawn(nx, ny, Blood, 0); // lethal hit
+                stop = true;
+                break;
+            } else if matches!(t, Glass | Sand | Snow | Ash | Dirt | Plant | Seed) {
+                self.cells[idx(nx, ny)] = Cell::EMPTY; // punches through soft stuff
+                cx = nx;
+                cy = ny;
+            } else {
+                stop = true; // stone/metal/wall stops it
+                break;
+            }
+        }
+        if (cx, cy) != (x, y) {
+            self.relocate(x, y, cx, cy);
+        }
+        if stop {
+            self.cells[idx(cx, cy)] = Cell::EMPTY;
+        }
+    }
+
+    fn update_gun(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        let mut c = self.cells[i];
+        if c.timer > 0 {
+            c.timer -= 1;
+            self.cells[i] = c;
+            return;
+        }
+        c.timer = gen_range(18, 34) as u8;
+        self.cells[i] = c;
+        let (dx, dy) = dir_delta(c.dir);
+        let (nx, ny) = (x + dx, y + dy);
+        if self.el_at(nx, ny) == Empty {
+            self.spawn(nx, ny, Bullet, 110);
+            let j = idx(nx, ny);
+            self.cells[j].dir = c.dir;
+        }
+    }
+
+    fn update_laser(&mut self, x: i32, y: i32) {
+        let dir = self.cells[idx(x, y)].dir;
+        let (dx, dy) = dir_delta(dir);
+        let (mut cx, mut cy) = (x, y);
+        for _ in 0..250 {
+            cx += dx;
+            cy += dy;
+            if !in_bounds(cx, cy) {
+                break;
+            }
+            let t = self.el_at(cx, cy);
+            let j = idx(cx, cy);
+            if t == Empty {
+                self.spawn(cx, cy, Fire, 1); // glowing beam
+                self.temp[j] = 600.0;
+            } else if props(t).cat == Cat::Gas {
+                self.temp[j] = 600.0;
+            } else {
+                // burns the first solid/liquid/creature it meets, then stops
+                self.temp[j] = self.temp[j].max(950.0);
+                if is_creature(t) {
+                    self.spawn(cx, cy, Blood, 0);
+                }
+                break;
+            }
+        }
+    }
+
+    // ---- tools ------------------------------------------------------------
+
+    fn update_cloner(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        let mut c = self.cells[i];
+        if c.timer == 0 {
+            // learn the first interesting neighbour
+            for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
+                let e = self.el_at(x + dx, y + dy);
+                if !matches!(e, Empty | Wall | Cloner | Void | Bullet) {
+                    c.timer = el_index(e).saturating_add(1);
+                    self.cells[i] = c;
+                    break;
+                }
+            }
+        } else {
+            let el = el_from_index(c.timer - 1);
+            for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if self.el_at(nx, ny) == Empty && chance(3) {
+                    self.spawn(nx, ny, el, default_life(el));
+                }
+            }
+        }
+    }
+
+    fn update_void(&mut self, x: i32, y: i32) {
+        for (dx, dy) in [
+            (0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1),
+        ] {
+            let (nx, ny) = (x + dx, y + dy);
+            if in_bounds(nx, ny) {
+                let e = self.el_at(nx, ny);
+                if !matches!(e, Empty | Wall | Void) {
+                    let j = idx(nx, ny);
+                    self.cells[j] = Cell::EMPTY;
+                    self.temp[j] = AMBIENT;
+                }
+            }
+        }
+    }
+
     // ---- electricity -------------------------------------------------------
 
     fn charge_pass(&mut self) {
@@ -642,8 +1279,11 @@ impl World {
         // 1. emit: live heat/cold sources push their cell temperature.
         for i in 0..self.cells.len() {
             match self.cells[i].el {
-                Element::Fire => self.temp[i] = self.temp[i].max(720.0),
-                Element::Ember => self.temp[i] = self.temp[i].max(520.0),
+                Fire => self.temp[i] = self.temp[i].max(720.0),
+                Ember => self.temp[i] = self.temp[i].max(520.0),
+                Napalm => self.temp[i] = self.temp[i].max(520.0),
+                Heater => self.temp[i] = self.temp[i].max(450.0),
+                Cooler => self.temp[i] = self.temp[i].min(-30.0),
                 _ => {}
             }
         }
@@ -694,6 +1334,9 @@ impl World {
                 self.spawn(x, y, Element::Ember, gen_range(50, 110) as u8)
             }
             Element::Oil if t >= 250.0 => self.spawn(x, y, Element::Fire, gen_range(60, 110) as u8),
+            Element::Gasoline if t >= 80.0 => self.spawn(x, y, Fire, gen_range(50, 100) as u8),
+            Element::Coal if t >= 250.0 => self.spawn(x, y, Ember, gen_range(200, 255) as u8),
+            Element::Methane if t >= 150.0 => self.spawn(x, y, Fire, gen_range(40, 90) as u8),
             Element::Gunpowder if t >= 150.0 => self.explode(x, y, 7),
             Element::Metal if t >= 1200.0 => self.spawn(x, y, Element::Lava, 0),
             _ => {}
@@ -724,6 +1367,11 @@ impl World {
                 let v = (40.0 + f * 40.0) as u8;
                 [v, v, (v as u16 + 6) as u8, 255]
             }
+            Element::Napalm => {
+                // flickering burning goo
+                let f = (c.ra % 80) as u16;
+                [255, (70 + f) as u8, 20, 255]
+            }
             _ => {
                 let p = props(c.el);
                 shade(p.color, c.ra, p.var)
@@ -747,6 +1395,8 @@ fn default_life(el: Element) -> u8 {
         Element::Ember => gen_range(120, 220) as u8,
         Element::Smoke | Element::Toxic => gen_range(80, 160) as u8,
         Element::Steam => gen_range(120, 220) as u8,
+        Element::Napalm => gen_range(140, 240) as u8,
+        Element::Virus => gen_range(180, 255) as u8,
         _ => 0,
     }
 }
@@ -856,5 +1506,54 @@ mod tests {
             }
         }
         assert!(saw_steam, "water touching lava should boil into steam");
+    }
+
+    #[test]
+    fn person_dies_in_lava() {
+        let mut w = World::new();
+        for x in 0..20 {
+            w.spawn(x, 30, Element::Wall, 0); // ground so they don't just fall
+        }
+        // trap a lava cell so it can't flow away from its victim
+        w.spawn(4, 29, Element::Wall, 0);
+        w.spawn(7, 29, Element::Wall, 0);
+        w.spawn(6, 28, Element::Wall, 0);
+        w.spawn(6, 29, Element::Lava, 0);
+        w.spawn(5, 29, Element::Person, 100);
+        for _ in 0..20 {
+            w.step();
+        }
+        let mut alive = 0;
+        for c in &w.cells {
+            if c.el == Element::Person {
+                alive += 1;
+            }
+        }
+        assert_eq!(alive, 0, "person should have perished next to lava");
+    }
+
+    #[test]
+    fn mine_detonates_on_creature() {
+        let mut w = World::new();
+        w.spawn(10, 10, Element::Mine, 0);
+        w.spawn(11, 10, Element::Ant, 0);
+        for _ in 0..4 {
+            w.step();
+        }
+        assert_ne!(w.el_at(10, 10), Element::Mine, "mine should have triggered");
+    }
+
+    #[test]
+    fn gun_fires_bullets() {
+        let mut w = World::new();
+        w.paint(5, 10, 0, Element::Gun); // radius 0 -> single turret, init sets it firing right
+        let mut saw_bullet = false;
+        for _ in 0..80 {
+            w.step();
+            if w.cells.iter().any(|c| c.el == Element::Bullet) {
+                saw_bullet = true;
+            }
+        }
+        assert!(saw_bullet, "turret should have spat out a bullet");
     }
 }

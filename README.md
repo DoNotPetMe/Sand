@@ -29,16 +29,29 @@ behaviour fall out of them:
 - **Electrical conduction.** Charge propagates one cell per frame through metal
   and water (the *Spark* tool), detonating gunpowder/bombs and igniting oil —
   build wires and circuits.
-- **Life & chemistry.** Ants wander, eat plant/wood/sand and multiply; seeds
-  sprout into plants that climb where there's water; acid dissolves most solids
-  and vents toxic gas; salt dissolves into brine; gunpowder and bombs explode.
+- **Life & chemistry.** Ants wander, eat and multiply; people walk, climb,
+  flee fire, drown and bleed; zombies hunt people and turn them; fish swim and
+  suffocate out of water; a virus infects organic matter; seeds sprout into
+  climbing plants; acid dissolves solids; salt makes brine.
 
 ## Elements
 
-Eraser · Wall · Sand · Water · Oil · Salt · Stone · Wood · Metal · Glass · Ice ·
-Snow · Lava · Acid · Fire · Gunpowder · Bomb · Plant · Seed · Ant · Faucet, plus
-emergent materials you don't paint directly (Steam, Smoke, Toxic Gas, Ember,
-Saltwater, Ash).
+Picked from seven **submenu tabs** in the side panel:
+
+- **Solids** — Wall · Stone · Brick · Wood · Metal · Glass · Ice
+- **Powders** — Sand · Dirt · Salt · Coal · Gunpowder · Snow · Ash · Seed ·
+  Concrete (cures into stone)
+- **Liquids** — Water · Oil · Gasoline · Acid · Lava · Blood · Mercury
+  (heavy & conductive) · Napalm (sticky fire)
+- **Gases** — Steam · Smoke · Toxic Gas · Methane (explosive) · Fire
+- **Life** — Plant · Ant · **Person** · **Zombie** · **Fish** · Virus
+- **Weapons** — Bomb · TNT · C4 (remote-detonated by spark) · Nuke · Mine
+  (pressure-triggered) · Grenade (timed) · Fireworks · Missile · Turret Gun
+  (fires bullets) · Laser (cutting beam)
+- **Tools** — Eraser · Faucet · Cloner (copies any material) · Void (deletes) ·
+  Heater · Cooler · Spark
+
+Plus emergent materials you don't paint directly (Saltwater, Ember, Bullet).
 
 ## Build & run
 
@@ -54,10 +67,11 @@ cargo run --release
 |-------|--------|
 | Left click / drag | Paint the selected material |
 | Right click / drag | Erase |
-| Mouse wheel | Brush size |
-| Click palette (right) | Select material |
-| `1`–`9` | Quick-pick first nine materials |
-| `Z` / palette *Spark* | Spark tool — inject charge into wires |
+| Mouse wheel | Brush size (0 = single cell, for placing one person/turret) |
+| Click a tab | Switch submenu (Solids, Powders, Liquids, …) |
+| Click a swatch | Select material |
+| `1`–`9` | Quick-pick within the active submenu |
+| `Z` / Tools *Spark* | Spark tool — inject charge into wires |
 | `Space` | Pause / resume |
 | `C` | Clear the world |
 | `R` | Reset everything |
@@ -68,7 +82,7 @@ The binary can seed a demo scene, simulate it, and export a PNG without any
 interaction — useful for CI or generating the image above:
 
 ```sh
-SAND_DEMO=1 SAND_SCREENSHOT=showcase.png SAND_SHOT_FRAME=90 cargo run --release
+SAND_DEMO=1 SAND_SCREENSHOT=showcase.png SAND_SHOT_FRAME=45 cargo run --release
 ```
 
 ## Architecture

@@ -8,7 +8,7 @@ mod element;
 mod ui;
 mod world;
 
-use element::{Element, PALETTE};
+use element::Element;
 use macroquad::prelude::*;
 use ui::{Ui, PANEL_W, SCALE, SIM_W, STATUS_H};
 use world::{World, H, W};
@@ -23,15 +23,15 @@ fn window_conf() -> Conf {
     }
 }
 
-/// Quick-pick number keys 1-9 map to the first nine palette entries.
-fn quick_pick() -> Option<Element> {
+/// Quick-pick number keys 1-9 select from the active category's element list.
+fn quick_pick(list: &[Element]) -> Option<Element> {
     const KEYS: [KeyCode; 9] = [
         KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4, KeyCode::Key5,
         KeyCode::Key6, KeyCode::Key7, KeyCode::Key8, KeyCode::Key9,
     ];
     for (n, &k) in KEYS.iter().enumerate() {
-        if is_key_pressed(k) && n < PALETTE.len() {
-            return Some(PALETTE[n]);
+        if is_key_pressed(k) && n < list.len() {
+            return Some(list[n]);
         }
     }
     None
@@ -80,13 +80,37 @@ fn setup_demo(world: &mut World) {
             world.spawn(x, y, Element::Lava, 0);
         }
     }
-    // a salted plant garden fed by a faucet
+    // a plant garden fed by a faucet
     world.spawn(150, 40, Element::WaterSource, 0);
     for x in 145..156 {
         world.spawn(x, h - 3, Element::Plant, 0);
     }
-    // a pile of gunpowder with a bomb, near the flames
-    world.paint(200, h - 10, 6, Element::Gunpowder);
+    // --- people & weapons showcase -------------------------------------
+    // a crowd of people standing on the floor between the basin and the wood
+    for i in 0..16 {
+        world.paint(120 + i * 4, h - 3, 0, Element::Person);
+    }
+    // a couple of zombies shambling toward them
+    world.paint(118, h - 3, 0, Element::Zombie);
+    world.paint(190, h - 3, 0, Element::Zombie);
+    // a turret on a post, raining bullets across the crowd
+    for y in (h - 14)..(h - 2) {
+        world.spawn(128, y, Element::Metal, 0);
+    }
+    world.paint(129, h - 14, 0, Element::Gun);
+    // a landmine buried in the path
+    world.paint(170, h - 3, 0, Element::Mine);
+    // fireworks streaking up out of the floor
+    world.paint(95, h - 20, 0, Element::Fireworks);
+    world.paint(160, h - 24, 0, Element::Fireworks);
+    // a missile climbing on the right
+    world.paint(205, h - 30, 0, Element::Missile);
+    // a pile of TNT near the flames for a chain reaction
+    world.paint(200, h - 10, 5, Element::Tnt);
+    // fish swimming in the basin
+    for i in 0..6 {
+        world.spawn(55 + i * 8, h - 20, Element::Fish, 90);
+    }
     // some ants on the sand
     for i in 0..12 {
         world.spawn(70 + i, 50, Element::Ant, 0);
@@ -109,6 +133,8 @@ async fn main() {
         .unwrap_or(150);
     if demo {
         setup_demo(&mut world);
+        ui.category = element::Menu::Weapons;
+        ui.selected = Element::Missile;
     }
     let mut frame_no: u64 = 0;
 
@@ -132,7 +158,7 @@ async fn main() {
         if is_key_pressed(KeyCode::Z) {
             ui.spark_tool = !ui.spark_tool;
         }
-        if let Some(el) = quick_pick() {
+        if let Some(el) = quick_pick(&ui.current_list()) {
             ui.selected = el;
             ui.spark_tool = false;
         }
