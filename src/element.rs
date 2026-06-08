@@ -60,6 +60,9 @@ pub enum Element {
     Gun,
     Bullet,
     Laser,
+    // --- disasters (spawned by events, not painted) -------------------
+    Meteor,
+    Volcano,
     // --- tools / special ----------------------------------------------
     WaterSource,
     Cloner,
@@ -89,6 +92,7 @@ pub enum Menu {
     Life,
     Weapons,
     Tools,
+    Events,
     Hidden,
 }
 
@@ -182,6 +186,9 @@ pub fn props(el: Element) -> Props {
         Bullet => p("Bullet", Life, M::Hidden, 0, (255, 240, 180), 6),
         Laser => p("Laser", Solid, M::Weapons, 9000, (200, 50, 50), 8),
 
+        Meteor => p("Meteor", Life, M::Hidden, 0, (255, 150, 50), 30),
+        Volcano => p("Volcano", Life, M::Hidden, 9000, (120, 45, 30), 20),
+
         // tools / special
         WaterSource => p("Faucet", Solid, M::Tools, 9000, (60, 90, 150), 8),
         Cloner => p("Cloner", Solid, M::Tools, 9000, (180, 150, 220), 14),
@@ -197,8 +204,8 @@ pub const ALL: &[Element] = &[
     Gunpowder, Snow, Ash, Seed, Concrete, Water, SaltWater, Oil, Gasoline, Acid,
     Lava, Blood, Mercury, Napalm, Steam, Smoke, Toxic, Methane, Fire, Plant,
     Ant, Person, Zombie, Fish, Virus, Ember, Bomb, Tnt, C4, Nuke, Mine, Grenade,
-    Fireworks, Missile, Gun, Bullet, Laser, WaterSource, Cloner, Void, Heater,
-    Cooler,
+    Fireworks, Missile, Gun, Bullet, Laser, Meteor, Volcano, WaterSource,
+    Cloner, Void, Heater, Cooler,
 ];
 
 /// The submenu tabs shown in the UI, in order.
@@ -210,6 +217,7 @@ pub const CATEGORIES: &[(Menu, &str)] = &[
     (M::Life, "Life"),
     (M::Weapons, "Weapons"),
     (M::Tools, "Tools"),
+    (M::Events, "Events"),
 ];
 
 /// Elements shown under a given submenu tab.
@@ -259,6 +267,8 @@ pub fn is_creature(el: Element) -> bool {
 pub fn natural_temp(el: Element) -> Option<f32> {
     match el {
         Lava => Some(1200.0),
+        Meteor => Some(950.0),
+        Volcano => Some(1100.0),
         Fire => Some(720.0),
         Ember => Some(540.0),
         Napalm => Some(500.0),

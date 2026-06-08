@@ -10,8 +10,75 @@ mod world;
 
 use element::Element;
 use macroquad::prelude::*;
-use ui::{Ui, PANEL_W, SCALE, SIM_W, STATUS_H};
+use ui::{Ev, Ui, PANEL_W, SCALE, SIM_W, STATUS_H};
 use world::{World, H, W};
+
+/// Apply a disaster/weather event. Toggles mutate the weather flags; one-shots
+/// hit the world directly. `shake` drives the screen-shake effect.
+fn apply_event(
+    world: &mut World,
+    ev: Ev,
+    grid_x: i32,
+    rain: &mut bool,
+    acid: &mut bool,
+    shake: &mut i32,
+) {
+    match ev {
+        Ev::Meteor => {
+            world.meteor_shower();
+            *shake = (*shake).max(12);
+        }
+        Ev::Lightning => world.lightning(grid_x),
+        Ev::Volcano => {
+            world.erupt_volcano();
+            *shake = (*shake).max(8);
+        }
+        Ev::Earthquake => {
+            world.earthquake();
+            *shake = (*shake).max(30);
+        }
+        Ev::Flood => world.flood(),
+        Ev::Plague => world.plague(),
+        Ev::ToggleRain => *rain = !*rain,
+        Ev::ToggleAcidRain => *acid = !*acid,
+        Ev::WindLeft => world.wind = if world.wind == -1 { 0 } else { -1 },
+        Ev::WindRight => world.wind = if world.wind == 1 { 0 } else { 1 },
+        Ev::Calm => {
+            *rain = false;
+            *acid = false;
+            world.wind = 0;
+        }
+    }
+}
+
+/// Map disaster hotkeys to events.
+fn event_hotkey() -> Option<Ev> {
+    if is_key_pressed(KeyCode::M) {
+        Some(Ev::Meteor)
+    } else if is_key_pressed(KeyCode::L) {
+        Some(Ev::Lightning)
+    } else if is_key_pressed(KeyCode::V) {
+        Some(Ev::Volcano)
+    } else if is_key_pressed(KeyCode::E) {
+        Some(Ev::Earthquake)
+    } else if is_key_pressed(KeyCode::F) {
+        Some(Ev::Flood)
+    } else if is_key_pressed(KeyCode::P) {
+        Some(Ev::Plague)
+    } else if is_key_pressed(KeyCode::O) {
+        Some(Ev::ToggleRain)
+    } else if is_key_pressed(KeyCode::I) {
+        Some(Ev::ToggleAcidRain)
+    } else if is_key_pressed(KeyCode::Comma) {
+        Some(Ev::WindLeft)
+    } else if is_key_pressed(KeyCode::Period) {
+        Some(Ev::WindRight)
+    } else if is_key_pressed(KeyCode::Slash) {
+        Some(Ev::Calm)
+    } else {
+        None
+    }
+}
 
 fn window_conf() -> Conf {
     Conf {
@@ -133,8 +200,10 @@ async fn main() {
         .unwrap_or(150);
     if demo {
         setup_demo(&mut world);
-        ui.category = element::Menu::Weapons;
-        ui.selected = Element::Missile;
+        ui.category = element::Menu::Events;
+        // unleash a dramatic scene for the showcase
+        world.wind = 1;
+        world.meteor_shower();
     }
     let mut frame_no: u64 = 0;
 
@@ -143,6 +212,9 @@ async fn main() {
     texture.set_filter(FilterMode::Nearest);
 
     let mut prev_mouse: Option<(f32, f32)> = None;
+    let mut rain_on = false;
+    let mut acid_on = false;
+    let mut shake: i32 = 0;
 
     loop {
         // ---- input --------------------------------------------------------
@@ -171,9 +243,15 @@ async fn main() {
         let (mx, my) = mouse_position();
         let in_sim = mx < SIM_W && my < H as f32 * SCALE;
 
-        // panel clicks select tools
+        // panel clicks select tools / trigger events
         if is_mouse_button_pressed(MouseButton::Left) && mx >= SIM_W {
             ui.handle_panel_click(mx, my);
+        }
+
+        // disasters & weather, from panel buttons or hotkeys
+        let grid_x = (mx / SCALE).clamp(0.0, (W - 1) as f32) as i32;
+        if let Some(ev) = ui.event.take().or_else(event_hotkey) {
+            apply_event(&mut world, ev, grid_x, &mut rain_on, &mut acid_on, &mut shake);
         }
 
         let painting_left = is_mouse_button_down(MouseButton::Left) && in_sim;
@@ -205,6 +283,12 @@ async fn main() {
 
         // ---- simulate -----------------------------------------------------
         if !ui.paused {
+            if rain_on {
+                world.rain(Element::Water);
+            }
+            if acid_on {
+                world.rain(Element::Acid);
+            }
             world.step();
         }
 
@@ -219,11 +303,19 @@ async fn main() {
         }
         texture.update(&image);
 
+        // screen shake offset for earthquakes / big impacts
+        let (ox, oy) = if shake > 0 {
+            shake -= 1;
+            (rand::gen_range(-4.0, 4.0), rand::gen_range(-4.0, 4.0))
+        } else {
+            (0.0, 0.0)
+        };
+
         clear_background(Color::from_rgba(12, 12, 16, 255));
         draw_texture_ex(
             &texture,
-            0.0,
-            0.0,
+            ox,
+            oy,
             WHITE,
             DrawTextureParams {
                 dest_size: Some(vec2(W as f32 * SCALE, H as f32 * SCALE)),
@@ -236,7 +328,7 @@ async fn main() {
             draw_circle_lines(mx, my, ui.brush as f32 * SCALE, 1.0, Color::from_rgba(255, 255, 255, 120));
         }
 
-        ui.draw(get_fps(), particles);
+        ui.draw(get_fps(), particles, world.population(), rain_on, acid_on, world.wind);
 
         // headless screenshot: capture the framebuffer and quit
         if let Some(path) = &shot_path {

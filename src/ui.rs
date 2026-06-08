@@ -16,6 +16,36 @@ const TAB_H: f32 = 22.0;
 const LIST_TOP: f32 = 158.0; // below 4 rows of category tabs
 const ROW_H: f32 = 28.0;
 
+/// A one-shot or toggle world event triggered from the Events tab.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Ev {
+    Meteor,
+    Lightning,
+    Volcano,
+    Earthquake,
+    Flood,
+    Plague,
+    ToggleRain,
+    ToggleAcidRain,
+    WindLeft,
+    WindRight,
+    Calm,
+}
+
+const EVENTS: &[(Ev, &str, (u8, u8, u8))] = &[
+    (Ev::Meteor, "Meteor Shower  M", (255, 150, 50)),
+    (Ev::Lightning, "Lightning  L", (180, 220, 255)),
+    (Ev::Volcano, "Volcano  V", (200, 80, 30)),
+    (Ev::Earthquake, "Earthquake  E", (150, 115, 70)),
+    (Ev::Flood, "Flood  F", (50, 120, 210)),
+    (Ev::Plague, "Plague  P", (205, 60, 200)),
+    (Ev::ToggleRain, "Rain  O", (80, 150, 220)),
+    (Ev::ToggleAcidRain, "Acid Rain  I", (120, 220, 60)),
+    (Ev::WindLeft, "Wind <  ,", (190, 190, 200)),
+    (Ev::WindRight, "Wind >  .", (190, 190, 200)),
+    (Ev::Calm, "Calm / Clear  /", (120, 120, 130)),
+];
+
 pub struct Ui {
     pub category: Menu,
     pub selected: Element,
@@ -23,6 +53,8 @@ pub struct Ui {
     pub paused: bool,
     /// "spark" mode: left-click injects charge instead of painting.
     pub spark_tool: bool,
+    /// An event the user clicked this frame, consumed by the main loop.
+    pub event: Option<Ev>,
 }
 
 impl Ui {
@@ -33,6 +65,7 @@ impl Ui {
             brush: 4,
             paused: false,
             spark_tool: false,
+            event: None,
         }
     }
 
@@ -76,6 +109,15 @@ impl Ui {
                 return true;
             }
         }
+        if self.category == Menu::Events {
+            for (n, &(ev, _, _)) in EVENTS.iter().enumerate() {
+                if Self::button_rect(n).contains(vec2(mx, my)) {
+                    self.event = Some(ev);
+                    return true;
+                }
+            }
+            return true;
+        }
         let list = self.current_list();
         for (n, &el) in list.iter().enumerate() {
             if Self::button_rect(n).contains(vec2(mx, my)) {
@@ -91,7 +133,15 @@ impl Ui {
         true // swallow other clicks in the panel
     }
 
-    pub fn draw(&self, fps: i32, particles: usize) {
+    pub fn draw(
+        &self,
+        fps: i32,
+        particles: usize,
+        population: usize,
+        rain_on: bool,
+        acid_on: bool,
+        wind: i32,
+    ) {
         draw_rectangle(SIM_W, 0.0, PANEL_W, screen_height(), Color::from_rgba(24, 24, 30, 255));
         draw_line(SIM_W, 0.0, SIM_W, screen_height(), 2.0, Color::from_rgba(50, 50, 60, 255));
 
@@ -112,6 +162,34 @@ impl Ui {
                 draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, YELLOW);
             }
             draw_text(label, r.x + 8.0, r.y + 16.0, 17.0, WHITE);
+        }
+
+        // the Events tab lists disasters/weather instead of materials
+        if self.category == Menu::Events {
+            for (n, &(ev, label, color)) in EVENTS.iter().enumerate() {
+                let r = Self::button_rect(n);
+                let active = matches!(
+                    (ev, rain_on, acid_on, wind),
+                    (Ev::ToggleRain, true, _, _)
+                        | (Ev::ToggleAcidRain, _, true, _)
+                        | (Ev::WindLeft, _, _, -1)
+                        | (Ev::WindRight, _, _, 1)
+                );
+                let bg = if active {
+                    Color::from_rgba(80, 70, 95, 255)
+                } else {
+                    Color::from_rgba(40, 40, 50, 255)
+                };
+                draw_rectangle(r.x, r.y, r.w, r.h, bg);
+                if active {
+                    draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, YELLOW);
+                }
+                let (cr, cg, cb) = color;
+                draw_rectangle(r.x + 4.0, r.y + 3.0, 18.0, 18.0, Color::from_rgba(cr, cg, cb, 255));
+                draw_text(label, r.x + 30.0, r.y + 17.0, 18.0, WHITE);
+            }
+            self.draw_status(fps, particles, population, rain_on, acid_on, wind);
+            return;
         }
 
         // element buttons for the active category
@@ -151,6 +229,18 @@ impl Ui {
             draw_text("Spark (wire metal)", sr.x + 30.0, sr.y + 17.0, 18.0, WHITE);
         }
 
+        self.draw_status(fps, particles, population, rain_on, acid_on, wind);
+    }
+
+    fn draw_status(
+        &self,
+        fps: i32,
+        particles: usize,
+        population: usize,
+        rain_on: bool,
+        acid_on: bool,
+        wind: i32,
+    ) {
         // help text at the bottom of the panel
         let help = [
             "L-click paint   R-click erase",
@@ -172,13 +262,27 @@ impl Ui {
         } else {
             props(self.selected).name
         };
+        let mut weather = String::new();
+        if rain_on {
+            weather.push_str("  rain");
+        }
+        if acid_on {
+            weather.push_str("  acid-rain");
+        }
+        if wind < 0 {
+            weather.push_str("  wind<");
+        } else if wind > 0 {
+            weather.push_str("  wind>");
+        }
         let status = format!(
-            "{}   |   brush {}   |   {} particles   |   {} fps{}",
+            "{}  |  brush {}  |  pop {}  |  {} particles  |  {} fps{}{}",
             tool,
             self.brush,
+            population,
             particles,
             fps,
-            if self.paused { "   |   PAUSED" } else { "" }
+            if self.paused { "  |  PAUSED" } else { "" },
+            weather,
         );
         draw_text(&status, 10.0, by + 22.0, 20.0, Color::from_rgba(200, 200, 210, 255));
     }

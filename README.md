@@ -33,6 +33,11 @@ behaviour fall out of them:
   flee fire, drown and bleed; zombies hunt people and turn them; fish swim and
   suffocate out of water; a virus infects organic matter; seeds sprout into
   climbing plants; acid dissolves solids; salt makes brine.
+- **God-mode disasters & weather.** Don't just paint — *direct chaos*. Call down
+  meteor showers, lightning that powers your circuits, erupting volcanoes,
+  building-collapsing earthquakes (with screen shake), floods and plagues, then
+  toggle rain, acid rain, and **wind that fans wildfires and blows smoke**. The
+  people panic and flee; every run plays out differently.
 
 ## Elements
 
@@ -50,8 +55,11 @@ Picked from seven **submenu tabs** in the side panel:
   (fires bullets) · Laser (cutting beam)
 - **Tools** — Eraser · Faucet · Cloner (copies any material) · Void (deletes) ·
   Heater · Cooler · Spark
+- **Events** (disasters & weather, not painted) — Meteor Shower · Lightning ·
+  Volcano · Earthquake · Flood · Plague · Rain · Acid Rain · Wind ←/→ · Calm
 
-Plus emergent materials you don't paint directly (Saltwater, Ember, Bullet).
+Plus emergent materials you don't paint directly (Saltwater, Ember, Bullet,
+Meteor, Volcano).
 
 ## Build & run
 
@@ -75,6 +83,8 @@ cargo run --release
 | `Space` | Pause / resume |
 | `C` | Clear the world |
 | `R` | Reset everything |
+| `M` `L` `V` `E` `F` `P` | Meteor · Lightning (at cursor) · Volcano · Earthquake · Flood · Plague |
+| `O` `I` `,` `.` `/` | Rain · Acid rain · Wind ← · Wind → · Calm/clear weather |
 
 ### Headless showcase
 

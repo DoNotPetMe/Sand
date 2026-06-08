@@ -60,6 +60,8 @@ pub struct World {
     pub temp: Vec<f32>,
     scratch: Vec<f32>, // double buffer for heat diffusion
     pub frame: u64,
+    /// Prevailing wind: -1 blows left, +1 right, 0 calm. Drifts gases & fire.
+    pub wind: i32,
 }
 
 #[inline]
@@ -85,6 +87,7 @@ impl World {
             temp: vec![AMBIENT; W * H],
             scratch: vec![AMBIENT; W * H],
             frame: 0,
+            wind: 0,
         }
     }
 
@@ -293,6 +296,8 @@ impl World {
             Bullet => self.update_bullet(x, y),
             Gun => self.update_gun(x, y),
             Laser => self.update_laser(x, y),
+            Meteor => self.update_meteor(x, y),
+            Volcano => self.update_volcano(x, y),
             WaterSource => self.update_source(x, y),
             Cloner => self.update_cloner(x, y),
             Void => self.update_void(x, y),
@@ -408,6 +413,10 @@ impl World {
     }
 
     fn update_gas(&mut self, x: i32, y: i32) -> bool {
+        // wind shoves gases & fire sideways before they get a chance to rise
+        if self.wind != 0 && chance(2) && self.flow_side(x, y, self.wind) {
+            return true;
+        }
         // buoyant rise
         if self.try_move(x, y, x, y - 1, false) {
             return true;
@@ -1229,6 +1238,199 @@ impl World {
         }
     }
 
+    // ---- disasters: airborne hazards --------------------------------------
+
+    fn update_meteor(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        let mut c = self.cells[i];
+        if c.life <= 1 {
+            self.meteor_impact(x, y);
+            return;
+        }
+        c.life -= 1;
+        self.cells[i] = c;
+        let (mut cx, mut cy) = (x, y);
+        let mut hit = false;
+        for _ in 0..3 {
+            // meteors plunge down (with a touch of slant from the wind)
+            let nx = cx + if chance(4) { self.wind } else { 0 };
+            let ny = cy + 1;
+            if self.proj_passable(nx, ny) {
+                cx = nx;
+                cy = ny;
+            } else {
+                hit = true;
+                break;
+            }
+        }
+        if (cx, cy) != (x, y) {
+            self.relocate(x, y, cx, cy);
+            // blazing tail
+            self.spawn(x, y, if chance(2) { Smoke } else { Fire }, gen_range(20, 60) as u8);
+            self.temp[idx(x, y)] = 500.0;
+        }
+        if hit {
+            self.meteor_impact(cx, cy);
+        }
+    }
+
+    fn meteor_impact(&mut self, x: i32, y: i32) {
+        self.explode(x, y, 17);
+        // leave molten splatter in the crater
+        for _ in 0..40 {
+            let (dx, dy) = (gen_range(-9, 10), gen_range(-9, 10));
+            if dx * dx + dy * dy <= 81 && self.el_at(x + dx, y + dy) == Empty && chance(2) {
+                self.spawn(x + dx, y + dy, Lava, 0);
+            }
+        }
+    }
+
+    fn update_volcano(&mut self, x: i32, y: i32) {
+        let i = idx(x, y);
+        let mut c = self.cells[i];
+        // belch lava, fire and smoke upward out of the vent
+        for dx in -2..=2 {
+            let (nx, ny) = (x + dx, y - 1);
+            if self.el_at(nx, ny) == Empty && chance(2) {
+                let roll = gen_range(0, 100);
+                if roll < 55 {
+                    self.spawn(nx, ny, Lava, 0);
+                } else if roll < 80 {
+                    self.spawn(nx, ny, Fire, gen_range(40, 90) as u8);
+                } else {
+                    self.spawn(nx, ny, Smoke, gen_range(80, 160) as u8);
+                }
+            }
+        }
+        if c.timer <= 1 {
+            self.spawn(x, y, Stone, 0); // vent crusts over
+            return;
+        }
+        c.timer -= 1;
+        self.cells[i] = c;
+    }
+
+    // ---- disasters & weather: public event API ----------------------------
+
+    /// Rain a handful of fiery meteors down from the sky.
+    pub fn meteor_shower(&mut self) {
+        for _ in 0..gen_range(5, 10) {
+            let x = gen_range(0, W as i32);
+            let y = gen_range(0, 6);
+            self.spawn(x, y, Meteor, gen_range(200, 255) as u8);
+            self.cells[idx(x, y)].dir = 2;
+        }
+    }
+
+    /// Strike a jagged lightning bolt down column `sx`: ignites, super-heats
+    /// and charges any wiring it passes through.
+    pub fn lightning(&mut self, sx: i32) {
+        let mut x = sx.clamp(0, W as i32 - 1);
+        for y in 0..H as i32 {
+            if chance(2) {
+                x = (x + gen_range(-1, 2)).clamp(0, W as i32 - 1);
+            }
+            // energise nearby conductors so bolts can power circuits
+            for dx in -1..=1 {
+                if conductive(self.el_at(x + dx, y)) {
+                    self.cells[idx(x + dx, y)].charge = 18;
+                }
+            }
+            let t = self.el_at(x, y);
+            let j = idx(x, y);
+            if t == Empty || props(t).cat == Cat::Gas {
+                self.spawn(x, y, Fire, gen_range(4, 10) as u8);
+                self.temp[j] = 1200.0;
+            } else {
+                self.temp[j] = self.temp[j].max(1200.0);
+                self.explode(x, y, 5);
+                break;
+            }
+        }
+    }
+
+    /// Erupt a volcano from the ground near the centre of the world.
+    pub fn erupt_volcano(&mut self) {
+        let x = gen_range(W as i32 / 4, 3 * W as i32 / 4);
+        let y = H as i32 - 4;
+        for dx in -1..=1 {
+            self.spawn(x + dx, y, Volcano, 0);
+            let i = idx(x + dx, y);
+            self.cells[i].timer = gen_range(180, 255) as u8;
+        }
+    }
+
+    /// Shake the world: crumble masonry and jostle loose powders so structures
+    /// collapse.
+    pub fn earthquake(&mut self) {
+        let n = W * H / 30;
+        for _ in 0..n {
+            let x = gen_range(0, W as i32);
+            let y = gen_range(0, H as i32);
+            match self.el_at(x, y) {
+                Stone if chance(3) => {
+                    self.spawn(x, y, if chance(2) { Sand } else { Dirt }, 0);
+                }
+                Brick if chance(4) => self.spawn(x, y, Sand, 0),
+                Sand | Dirt | Gunpowder | Salt | Coal | Ash | Snow => {
+                    let d = if chance(2) { 1 } else { -1 };
+                    if self.el_at(x + d, y) == Empty {
+                        self.swap_cells(x, y, x + d, y);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// A rising flood: fill the lower world with water.
+    pub fn flood(&mut self) {
+        for y in (H as i32 - 26)..(H as i32) {
+            for x in 0..W as i32 {
+                if self.el_at(x, y) == Empty {
+                    self.spawn(x, y, Water, 0);
+                }
+            }
+        }
+    }
+
+    /// Unleash a plague: infect people if any exist, else scatter virus.
+    pub fn plague(&mut self) {
+        let mut infected = false;
+        for i in 0..self.cells.len() {
+            if self.cells[i].el == Person && chance(14) {
+                let (x, y) = ((i % W) as i32, (i / W) as i32);
+                self.spawn(x, y, Virus, gen_range(180, 255) as u8);
+                infected = true;
+            }
+        }
+        if !infected {
+            for _ in 0..40 {
+                let x = gen_range(0, W as i32);
+                let y = gen_range(0, H as i32);
+                if self.el_at(x, y) == Empty {
+                    self.spawn(x, y, Virus, gen_range(180, 255) as u8);
+                }
+            }
+        }
+    }
+
+    /// Sprinkle a row of droplets from the sky (water or acid). Call per frame
+    /// while the weather is on.
+    pub fn rain(&mut self, el: Element) {
+        for _ in 0..(W / 8) {
+            let x = gen_range(0, W as i32);
+            if self.el_at(x, 0) == Empty {
+                self.spawn(x, 0, el, 0);
+            }
+        }
+    }
+
+    /// Count the living people (for the survival HUD).
+    pub fn population(&self) -> usize {
+        self.cells.iter().filter(|c| c.el == Person).count()
+    }
+
     // ---- electricity -------------------------------------------------------
 
     fn charge_pass(&mut self) {
@@ -1282,6 +1484,8 @@ impl World {
                 Fire => self.temp[i] = self.temp[i].max(720.0),
                 Ember => self.temp[i] = self.temp[i].max(520.0),
                 Napalm => self.temp[i] = self.temp[i].max(520.0),
+                Meteor => self.temp[i] = self.temp[i].max(700.0),
+                Volcano => self.temp[i] = self.temp[i].max(900.0),
                 Heater => self.temp[i] = self.temp[i].max(450.0),
                 Cooler => self.temp[i] = self.temp[i].min(-30.0),
                 _ => {}
@@ -1371,6 +1575,11 @@ impl World {
                 // flickering burning goo
                 let f = (c.ra % 80) as u16;
                 [255, (70 + f) as u8, 20, 255]
+            }
+            Element::Meteor => {
+                // white-hot core with a flickering edge
+                let f = (c.ra % 60) as u16;
+                [255, (170 + f).min(255) as u8, (60 + f) as u8, 255]
             }
             _ => {
                 let p = props(c.el);
@@ -1555,5 +1764,41 @@ mod tests {
             }
         }
         assert!(saw_bullet, "turret should have spat out a bullet");
+    }
+
+    #[test]
+    fn meteor_shower_causes_destruction() {
+        let mut w = World::new();
+        for x in 0..W as i32 {
+            for y in (H as i32 - 3)..H as i32 {
+                w.spawn(x, y, Element::Stone, 0);
+            }
+        }
+        w.meteor_shower();
+        let mut boom = false;
+        for _ in 0..220 {
+            w.step();
+            if w.cells.iter().any(|c| matches!(c.el, Element::Fire | Element::Lava)) {
+                boom = true;
+            }
+        }
+        assert!(boom, "meteors should ignite fire/lava");
+    }
+
+    #[test]
+    fn earthquake_crumbles_stone() {
+        let mut w = World::new();
+        for x in 0..40 {
+            for y in 50..70 {
+                w.spawn(x, y, Element::Stone, 0);
+            }
+        }
+        let before = w.cells.iter().filter(|c| c.el == Element::Stone).count();
+        for _ in 0..6 {
+            w.earthquake();
+            w.step();
+        }
+        let after = w.cells.iter().filter(|c| c.el == Element::Stone).count();
+        assert!(after < before, "earthquake should crumble some stone");
     }
 }
