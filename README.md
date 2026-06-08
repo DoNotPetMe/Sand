@@ -11,6 +11,24 @@ The screenshot above is a single simulated scene: oil floating on a water basin
 throwing a plume of fire and smoke (right), and a lava pool cooling into a stone
 crust on a shelf (far right).
 
+## Ragdoll people — a physics layer on the sand
+
+On top of the cellular grid runs a **Verlet ragdoll** system: articulated humans
+made of point masses and distance constraints that collide with the terrain and
+react to everything the sandbox can throw at them. This is the headline feature.
+
+- **Grab & fling** (default tool): click-drag any limb to pick a body up and
+  throw it — Verlet history makes the throws feel weighty.
+- **They stand when alive, go limp when dead.** A gentle balance keeps a living
+  person upright; shove them and they stagger and recover, until they don't.
+- **Full dismemberment.** Every region (head, torso, arms, legs) has its own
+  health. Bullets punch through flesh, explosions send bodies flying and tear
+  off limbs, fire ignites and chars them black, lava and acid kill, electricity
+  makes them spasm, and water makes them float. Limbs **sever** at zero health
+  and everything **bleeds** real blood onto the grid.
+
+Drop people with the **Human** tool (`H`), then experiment.
+
 ## What makes it "more advanced"
 
 Most web sand games script every interaction as an explicit `A + B -> C` rule.
@@ -73,13 +91,13 @@ cargo run --release
 
 | Input | Action |
 |-------|--------|
-| Left click / drag | Paint the selected material |
+| Left click | Use the active tool (Grab / Paint / Human / Spark) |
 | Right click / drag | Erase |
-| Mouse wheel | Brush size (0 = single cell, for placing one person/turret) |
-| Click a tab | Switch submenu (Solids, Powders, Liquids, …) |
-| Click a swatch | Select material |
+| `G` `B` `H` `Z` | Grab · Paint · Human (drop a person) · Spark tools |
+| Grab-drag | Pick up and fling ragdolls |
+| Mouse wheel | Brush size (0 = single cell, for placing one turret etc.) |
+| Click a tab / swatch | Switch submenu / select material (→ Paint) |
 | `1`–`9` | Quick-pick within the active submenu |
-| `Z` / Tools *Spark* | Spark tool — inject charge into wires |
 | `Space` | Pause / resume |
 | `C` | Clear the world |
 | `R` | Reset everything |
@@ -102,7 +120,9 @@ src/
   element.rs   element catalogue + static properties (colour, density, ...)
   world.rs     the simulation: cell grid, temperature field, movement,
                chemistry, electricity, heat diffusion, phase changes
-  ui.rs        side-panel palette + status bar (plain macroquad drawing)
+  physics.rs   the Verlet ragdoll layer: articulated humans, collision,
+               grab/throw, dismemberment, and reactions to the grid
+  ui.rs        side-panel palette + tool/tab bar + status bar
   main.rs      window, input, and the GPU-texture render path
 ```
 
@@ -110,7 +130,9 @@ Each `World::step()` runs four passes: clear move-flags → propagate charge →
 movement + chemistry (scanned bottom-up, alternating x direction to avoid drift
 bias) → heat (emit from sources, diffuse, apply phase changes). The whole grid
 is uploaded to a single GPU texture each frame, so rendering ~120k cells is
-effectively free and the CPU budget goes to physics.
+effectively free and the CPU budget goes to physics. After the grid steps, the
+ragdoll layer integrates on top of it — reading terrain, temperature, charge and
+bullets out of the grid, and writing blood, fire and smoke back into it.
 
 Run the physics tests (no display needed) with:
 

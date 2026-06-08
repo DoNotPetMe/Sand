@@ -55,6 +55,15 @@ fn dir_delta(dir: u8) -> (i32, i32) {
     }
 }
 
+/// An explosion recorded this frame so the ragdoll layer can apply knockback.
+#[derive(Clone, Copy)]
+pub struct Blast {
+    pub x: f32,
+    pub y: f32,
+    pub r: f32,
+    pub power: f32,
+}
+
 pub struct World {
     pub cells: Vec<Cell>,
     pub temp: Vec<f32>,
@@ -62,6 +71,8 @@ pub struct World {
     pub frame: u64,
     /// Prevailing wind: -1 blows left, +1 right, 0 calm. Drifts gases & fire.
     pub wind: i32,
+    /// Explosions from this frame, consumed by the ragdoll physics layer.
+    pub blasts: Vec<Blast>,
 }
 
 #[inline]
@@ -88,6 +99,7 @@ impl World {
             scratch: vec![AMBIENT; W * H],
             frame: 0,
             wind: 0,
+            blasts: Vec::new(),
         }
     }
 
@@ -174,6 +186,57 @@ impl World {
         false
     }
 
+    // ---- interface for the ragdoll physics layer --------------------------
+
+    /// Temperature at a cell (ambient outside the world).
+    pub fn temp_at(&self, x: i32, y: i32) -> f32 {
+        if in_bounds(x, y) {
+            self.temp[idx(x, y)]
+        } else {
+            AMBIENT
+        }
+    }
+
+    /// Electrical charge at a cell.
+    pub fn charge_at(&self, x: i32, y: i32) -> u8 {
+        if in_bounds(x, y) {
+            self.cells[idx(x, y)].charge
+        } else {
+            0
+        }
+    }
+
+    /// Whether a point collides with solid terrain (the world edge counts).
+    pub fn solid_at(&self, fx: f32, fy: f32) -> bool {
+        let x = fx.floor() as i32;
+        let y = fy.floor() as i32;
+        if !in_bounds(x, y) {
+            return true;
+        }
+        props(self.cells[idx(x, y)].el).cat == Cat::Solid
+    }
+
+    /// Drop a particle (blood, fire, …) into an empty cell only.
+    pub fn drip(&mut self, x: i32, y: i32, el: Element) {
+        if in_bounds(x, y) && self.cells[idx(x, y)].el == Empty {
+            self.spawn(x, y, el, default_life(el));
+        }
+    }
+
+    /// If a bullet sits here, remove it and return its travel direction so the
+    /// ragdoll can take the hit and the knockback.
+    pub fn take_bullet(&mut self, x: i32, y: i32) -> Option<(i32, i32)> {
+        if in_bounds(x, y) {
+            let i = idx(x, y);
+            if self.cells[i].el == Bullet {
+                let d = dir_delta(self.cells[i].dir);
+                self.cells[i] = Cell::EMPTY;
+                return Some(d);
+            }
+        }
+        None
+    }
+
     // ---- public painting API (used by the UI) -----------------------------
 
     /// Paint a filled circle of `el` (radius in cells) into the world.
@@ -242,6 +305,7 @@ impl World {
     // ---- the main update ---------------------------------------------------
 
     pub fn step(&mut self) {
+        self.blasts.clear();
         for c in &mut self.cells {
             c.moved = false;
         }
@@ -650,6 +714,12 @@ impl World {
 
     /// Blast a circular crater, scattering fire/smoke and a thermal spike.
     fn explode(&mut self, cx: i32, cy: i32, r: i32) {
+        self.blasts.push(Blast {
+            x: cx as f32,
+            y: cy as f32,
+            r: r as f32,
+            power: r as f32 * 0.7,
+        });
         for dy in -r..=r {
             for dx in -r..=r {
                 if dx * dx + dy * dy > r * r {
@@ -677,6 +747,12 @@ impl World {
     /// fallout ring, and a huge thermal spike.
     fn nuke_blast(&mut self, cx: i32, cy: i32) {
         let r = 46;
+        self.blasts.push(Blast {
+            x: cx as f32,
+            y: cy as f32,
+            r: r as f32,
+            power: 55.0,
+        });
         for dy in -r..=r {
             for dx in -r..=r {
                 let d2 = dx * dx + dy * dy;
@@ -1424,11 +1500,6 @@ impl World {
                 self.spawn(x, 0, el, 0);
             }
         }
-    }
-
-    /// Count the living people (for the survival HUD).
-    pub fn population(&self) -> usize {
-        self.cells.iter().filter(|c| c.el == Person).count()
     }
 
     // ---- electricity -------------------------------------------------------

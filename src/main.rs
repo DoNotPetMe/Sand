@@ -5,12 +5,14 @@
 //! drawing ~120k cells effectively free, leaving the CPU budget for physics.
 
 mod element;
+mod physics;
 mod ui;
 mod world;
 
 use element::Element;
 use macroquad::prelude::*;
-use ui::{Ev, Ui, PANEL_W, SCALE, SIM_W, STATUS_H};
+use physics::Ragdolls;
+use ui::{Ev, Tool, Ui, PANEL_W, SCALE, SIM_W, STATUS_H};
 use world::{World, H, W};
 
 /// Apply a disaster/weather event. Toggles mutate the weather flags; one-shots
@@ -109,78 +111,40 @@ fn quick_pick(list: &[Element]) -> Option<Element> {
 fn setup_demo(world: &mut World) {
     let w = W as i32;
     let h = H as i32;
-    // floor and side walls
+    // ground
     for x in 0..w {
         world.spawn(x, h - 1, Element::Wall, 0);
         world.spawn(x, h - 2, Element::Wall, 0);
     }
-    // a stone basin on the left holding water with oil floating on top
-    for y in (h - 60)..(h - 2) {
-        world.spawn(40, y, Element::Stone, 0);
-        world.spawn(110, y, Element::Stone, 0);
+    // a water pool on the left, held in a stone basin
+    for y in (h - 24)..(h - 2) {
+        world.spawn(18, y, Element::Stone, 0);
+        world.spawn(70, y, Element::Stone, 0);
     }
-    for x in 41..110 {
-        for y in (h - 40)..(h - 2) {
+    for x in 19..70 {
+        for y in (h - 20)..(h - 2) {
             world.spawn(x, y, Element::Water, 0);
         }
-        for y in (h - 46)..(h - 40) {
-            world.spawn(x, y, Element::Oil, 0);
-        }
     }
-    // a sand dune pouring from above
-    world.paint(75, 30, 16, Element::Sand);
-    // a solid wooden block set alight on the right (fire seeded *inside* the
-    // wood so it actually catches and spreads, throwing smoke)
-    for x in 215..=265 {
-        for y in (h - 50)..(h - 2) {
-            world.spawn(x, y, Element::Wood, 0);
-        }
+    // a lava pit on the right
+    for y in (h - 18)..(h - 2) {
+        world.spawn(232, y, Element::Stone, 0);
+        world.spawn(300, y, Element::Stone, 0);
     }
-    world.paint(240, h - 48, 7, Element::Fire);
-    world.paint(225, h - 40, 4, Element::Fire);
-    // a glowing lava pool held on a stone shelf
-    for x in 285..=315 {
-        world.spawn(x, h - 30, Element::Stone, 0);
-    }
-    for x in 286..=314 {
-        for y in (h - 44)..(h - 30) {
+    for x in 233..300 {
+        for y in (h - 14)..(h - 2) {
             world.spawn(x, y, Element::Lava, 0);
         }
     }
-    // a plant garden fed by a faucet
-    world.spawn(150, 40, Element::WaterSource, 0);
-    for x in 145..156 {
-        world.spawn(x, h - 3, Element::Plant, 0);
+    // a turret on a metal post, firing right across the crowd at chest height
+    for y in (h - 18)..(h - 2) {
+        world.spawn(90, y, Element::Metal, 0);
     }
-    // --- people & weapons showcase -------------------------------------
-    // a crowd of people standing on the floor between the basin and the wood
-    for i in 0..16 {
-        world.paint(120 + i * 4, h - 3, 0, Element::Person);
-    }
-    // a couple of zombies shambling toward them
-    world.paint(118, h - 3, 0, Element::Zombie);
-    world.paint(190, h - 3, 0, Element::Zombie);
-    // a turret on a post, raining bullets across the crowd
-    for y in (h - 14)..(h - 2) {
-        world.spawn(128, y, Element::Metal, 0);
-    }
-    world.paint(129, h - 14, 0, Element::Gun);
-    // a landmine buried in the path
-    world.paint(170, h - 3, 0, Element::Mine);
-    // fireworks streaking up out of the floor
-    world.paint(95, h - 20, 0, Element::Fireworks);
-    world.paint(160, h - 24, 0, Element::Fireworks);
-    // a missile climbing on the right
-    world.paint(205, h - 30, 0, Element::Missile);
-    // a pile of TNT near the flames for a chain reaction
-    world.paint(200, h - 10, 5, Element::Tnt);
-    // fish swimming in the basin
-    for i in 0..6 {
-        world.spawn(55 + i * 8, h - 20, Element::Fish, 90);
-    }
-    // some ants on the sand
-    for i in 0..12 {
-        world.spawn(70 + i, 50, Element::Ant, 0);
+    world.paint(91, h - 16, 0, Element::Gun);
+    // a campfire hazard on the floor
+    world.paint(170, h - 4, 4, Element::Fire);
+    for x in 165..176 {
+        world.spawn(x, h - 3, Element::Wood, 0);
     }
 }
 
@@ -190,6 +154,7 @@ async fn main() {
 
     let mut world = World::new();
     let mut ui = Ui::new();
+    let mut ragdolls = Ragdolls::new();
 
     // Headless showcase: seed a scene, simulate, save a PNG, then exit.
     let demo = std::env::var("SAND_DEMO").is_ok();
@@ -200,10 +165,12 @@ async fn main() {
         .unwrap_or(150);
     if demo {
         setup_demo(&mut world);
-        ui.category = element::Menu::Events;
-        // unleash a dramatic scene for the showcase
-        world.wind = 1;
-        world.meteor_shower();
+        ui.category = element::Menu::Life;
+        ui.tool = Tool::Grab;
+        // a line-up of ragdoll people between the turret and the lava pit
+        for i in 0..6 {
+            ragdolls.spawn_human(110.0 + i as f32 * 20.0, (H - 3) as f32);
+        }
     }
     let mut frame_no: u64 = 0;
 
@@ -223,16 +190,28 @@ async fn main() {
         }
         if is_key_pressed(KeyCode::C) {
             world.clear();
+            ragdolls.clear();
         }
         if is_key_pressed(KeyCode::R) {
             world = World::new();
+            ragdolls.clear();
+        }
+        // tool hotkeys
+        if is_key_pressed(KeyCode::G) {
+            ui.tool = Tool::Grab;
+        }
+        if is_key_pressed(KeyCode::H) {
+            ui.tool = Tool::Human;
         }
         if is_key_pressed(KeyCode::Z) {
-            ui.spark_tool = !ui.spark_tool;
+            ui.tool = Tool::Spark;
+        }
+        if is_key_pressed(KeyCode::B) {
+            ui.tool = Tool::Paint;
         }
         if let Some(el) = quick_pick(&ui.current_list()) {
             ui.selected = el;
-            ui.spark_tool = false;
+            ui.tool = Tool::Paint;
         }
 
         let (_, wheel_y) = mouse_wheel();
@@ -254,7 +233,25 @@ async fn main() {
             apply_event(&mut world, ev, grid_x, &mut rain_on, &mut acid_on, &mut shake);
         }
 
-        let painting_left = is_mouse_button_down(MouseButton::Left) && in_sim;
+        // ragdoll interaction (grab/throw, spawn) in grid coordinates
+        let (fx, fy) = (mx / SCALE, my / SCALE);
+        if in_sim && is_mouse_button_pressed(MouseButton::Left) {
+            match ui.tool {
+                Tool::Grab => ragdolls.grab(fx, fy),
+                Tool::Human => ragdolls.spawn_human(fx, fy),
+                _ => {}
+            }
+        }
+        if ui.tool == Tool::Grab {
+            if is_mouse_button_down(MouseButton::Left) {
+                ragdolls.drag(fx, fy);
+            } else {
+                ragdolls.release();
+            }
+        }
+
+        let painting_left =
+            is_mouse_button_down(MouseButton::Left) && in_sim && matches!(ui.tool, Tool::Paint | Tool::Spark);
         let painting_right = is_mouse_button_down(MouseButton::Right) && in_sim;
 
         if painting_left || painting_right {
@@ -270,7 +267,7 @@ async fn main() {
                 let y = py + (gy - py) * s / steps;
                 if painting_right {
                     world.paint(x, y, ui.brush, Element::Empty);
-                } else if ui.spark_tool {
+                } else if ui.tool == Tool::Spark {
                     world.zap(x, y, ui.brush.max(1));
                 } else {
                     world.paint(x, y, ui.brush, ui.selected);
@@ -290,6 +287,7 @@ async fn main() {
                 world.rain(Element::Acid);
             }
             world.step();
+            ragdolls.step(&mut world);
         }
 
         // ---- render -------------------------------------------------------
@@ -323,12 +321,22 @@ async fn main() {
             },
         );
 
-        // brush outline cursor
+        // ragdoll humans drawn on top of the sand
+        ragdolls.draw(SCALE, ox, oy);
+
+        // cursor: brush ring for painting, reticle for grab
         if in_sim {
-            draw_circle_lines(mx, my, ui.brush as f32 * SCALE, 1.0, Color::from_rgba(255, 255, 255, 120));
+            match ui.tool {
+                Tool::Paint | Tool::Spark => {
+                    draw_circle_lines(mx, my, ui.brush as f32 * SCALE, 1.0, Color::from_rgba(255, 255, 255, 120));
+                }
+                _ => {
+                    draw_circle_lines(mx, my, 7.0 * SCALE, 1.0, Color::from_rgba(120, 220, 220, 140));
+                }
+            }
         }
 
-        ui.draw(get_fps(), particles, world.population(), rain_on, acid_on, world.wind);
+        ui.draw(get_fps(), particles, ragdolls.count(), rain_on, acid_on, world.wind);
 
         // headless screenshot: capture the framebuffer and quit
         if let Some(path) = &shot_path {
